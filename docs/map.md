@@ -33,10 +33,11 @@ labels: [wayfinder:map]
 - [Scale envelope and distribution](tickets/012-scale-envelope-and-distribution.md) — thousands of Markdown files, ≤1 GB; community-directory standards from day one, BRAT delivery, directory submission post-v1.
 - [Testability architecture](tickets/013-testability-architecture.md) — pure-TS engine behind VaultPort/RemotePort, headless vitest with fakes; browser-only bundle as the mobile-safety gate.
 - [SDK-in-Obsidian feasibility](tickets/014-research-sdk-in-obsidian-feasibility.md) — verdict: SDK with patches; browser build bundles with build-time shims only (exact esbuild recipe in [the research doc](research/014-sdk-in-obsidian-feasibility.md)); all needed surfaces browser-pathed; 1.2 MB minified; AGPL-3.0 spawns [Choose Obsen's license](tickets/024-choose-license.md).
+- [Ancestor source](tickets/015-research-ancestor-source.md) — local shadow store (text only, content-addressed by `lastSyncedHash`, deflate-compressed with feature-detect); Filen versioning rejected on retention grounds (100-cap, quota-counted, dies with parent file), not API surface; no hybrid in v1; `remoteUuid` recorded anyway, keeping a post-v1 versioning fallback open.
 
 ## Frontier / open tickets
 
-Found by query, not listed here — open tickets in `docs/tickets/` with all blockers closed and no assignee. The riskiest unknown ([014 SDK-in-Obsidian feasibility](tickets/014-research-sdk-in-obsidian-feasibility.md)) is resolved; [015 ancestor source](tickets/015-research-ancestor-source.md), [016 Filen socket events](tickets/016-research-filen-socket-events.md), [017 plugin guidelines + BRAT](tickets/017-research-plugin-guidelines-and-brat.md), [018 agent test harness](tickets/018-research-agent-test-harness.md), and [024 choose license](tickets/024-choose-license.md) are all unblocked and parallelizable.
+Found by query, not listed here — open tickets in `docs/tickets/` with all blockers closed and no assignee. The riskiest unknown ([014 SDK-in-Obsidian feasibility](tickets/014-research-sdk-in-obsidian-feasibility.md)) and [015 ancestor source](tickets/015-research-ancestor-source.md) are resolved; [016 Filen socket events](tickets/016-research-filen-socket-events.md), [017 plugin guidelines + BRAT](tickets/017-research-plugin-guidelines-and-brat.md), [018 agent test harness](tickets/018-research-agent-test-harness.md), and [024 choose license](tickets/024-choose-license.md) are all unblocked and parallelizable.
 
 ## Not yet specified
 
@@ -45,7 +46,7 @@ Found by query, not listed here — open tickets in `docs/tickets/` with all blo
 - **Error-retry and offline policy details** — beyond "reconcile converges"; backoff, quota-full behavior, auth-expiry re-prompt flow. Sharpens inside the engine-algorithm and UX design tickets.
 - **Sync status / activity UI specifics** — status-bar states, log format. Sharpens inside the UX design ticket.
 - **`conflicts.md` exact format and lifecycle** — table layout is decided; dedup of rows, behavior when the file itself conflicts, whether resolved rows are ever auto-pruned.
-- **Filen account/test-account specifics** — free-tier limits relevant to testing and to versioning-based ancestors.
+- **Filen account/test-account specifics** — free-tier limits relevant to testing (versioning-based ancestors are off the table per [015](tickets/015-research-ancestor-source.md)).
 
 ## Out of scope
 
