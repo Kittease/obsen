@@ -35,10 +35,11 @@ labels: [wayfinder:map]
 - [SDK-in-Obsidian feasibility](tickets/014-research-sdk-in-obsidian-feasibility.md) — verdict: SDK with patches; browser build bundles with build-time shims only (exact esbuild recipe in [the research doc](research/014-sdk-in-obsidian-feasibility.md)); all needed surfaces browser-pathed; 1.2 MB minified; AGPL-3.0 spawns [Choose Obsen's license](tickets/024-choose-license.md).
 - [Ancestor source](tickets/015-research-ancestor-source.md) — local shadow store (text only, content-addressed by `lastSyncedHash`, deflate-compressed with feature-detect); Filen versioning rejected on retention grounds (100-cap, quota-counted, dies with parent file), not API surface; no hybrid in v1; `remoteUuid` recorded anyway, keeping a post-v1 versioning fallback open.
 - [Filen socket events](tickets/016-research-filen-socket-events.md) — works in the browser build (native WebSocket, zero extra shims) but is trigger-never-ledger: no delivery guarantees, known event gaps in 0.4.2, E2EE UUID-centric payloads, self-echo with no originator field; reconcile stays mandatory; full findings in [the research doc](research/016-filen-socket-events.md).
+- [Plugin guidelines and BRAT](tickets/017-research-plugin-guidelines-and-brat.md) — nothing blocks a sync plugin (network/account/payment all allowed with README disclosure); compliance is lintable via `eslint-plugin-obsidianmd`; BRAT installs from release assets (tag == manifest version, no `v` prefix), works on mobile; SecretStorage finding spawned [Adopt SecretStorage?](tickets/025-adopt-secretstorage-for-credentials.md); checklist in [the research doc](research/017-plugin-guidelines-and-brat.md).
 
 ## Frontier / open tickets
 
-Found by query, not listed here — open tickets in `docs/tickets/` with all blockers closed and no assignee. The riskiest unknown ([014 SDK-in-Obsidian feasibility](tickets/014-research-sdk-in-obsidian-feasibility.md)), [015 ancestor source](tickets/015-research-ancestor-source.md), and [016 Filen socket events](tickets/016-research-filen-socket-events.md) are resolved; [017 plugin guidelines + BRAT](tickets/017-research-plugin-guidelines-and-brat.md), [018 agent test harness](tickets/018-research-agent-test-harness.md), and [024 choose license](tickets/024-choose-license.md) are all unblocked and parallelizable.
+Found by query, not listed here — open tickets in `docs/tickets/` with all blockers closed and no assignee. All research except [018 agent test harness](tickets/018-research-agent-test-harness.md) is resolved; [018](tickets/018-research-agent-test-harness.md), [019 on-device spike](tickets/019-prototype-on-device-spike.md), [020 sync-state schema](tickets/020-design-sync-state-schema.md), [024 choose license](tickets/024-choose-license.md), and [025 adopt SecretStorage?](tickets/025-adopt-secretstorage-for-credentials.md) are all unblocked and parallelizable; [022 settings/onboarding UX](tickets/022-design-settings-onboarding-ux.md) now waits on 025.
 
 ## Not yet specified
 
@@ -48,6 +49,7 @@ Found by query, not listed here — open tickets in `docs/tickets/` with all blo
 - **Sync status / activity UI specifics** — status-bar states, log format. Sharpens inside the UX design ticket.
 - **`conflicts.md` exact format and lifecycle** — table layout is decided; dedup of rows, behavior when the file itself conflicts, whether resolved rows are ever auto-pruned.
 - **Filen account/test-account specifics** — free-tier limits relevant to testing (versioning-based ancestors are off the table per [015](tickets/015-research-ancestor-source.md)).
+- **Plugin display name** — manifest rules ban "Obsidian" and variations ("Obsi-"/"-sidian"); "Obsen" is neither literally but is Obsidian-evocative, and acceptance is reviewer discretion at directory submission. Not a beta blocker (names can change post-publication); settle in the spec ([017 research](research/017-plugin-guidelines-and-brat.md)).
 
 ## Out of scope
 

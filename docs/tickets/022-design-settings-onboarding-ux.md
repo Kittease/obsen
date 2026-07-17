@@ -4,7 +4,7 @@ title: "Design: settings and onboarding UX"
 labels: [wayfinder:grilling]
 status: open
 assignee:
-blocked_by: [14]
+blocked_by: [14, 25]
 ---
 
 ## Question
