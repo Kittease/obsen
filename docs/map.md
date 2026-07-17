@@ -32,10 +32,11 @@ labels: [wayfinder:map]
 - [First-link bootstrap](tickets/011-first-link-bootstrap.md) — hash-identical pairs silently; same-path-different-content → conflict copy; one-sided → copy over; nothing overwritten or deleted.
 - [Scale envelope and distribution](tickets/012-scale-envelope-and-distribution.md) — thousands of Markdown files, ≤1 GB; community-directory standards from day one, BRAT delivery, directory submission post-v1.
 - [Testability architecture](tickets/013-testability-architecture.md) — pure-TS engine behind VaultPort/RemotePort, headless vitest with fakes; browser-only bundle as the mobile-safety gate.
+- [SDK-in-Obsidian feasibility](tickets/014-research-sdk-in-obsidian-feasibility.md) — verdict: SDK with patches; browser build bundles with build-time shims only (exact esbuild recipe in [the research doc](research/014-sdk-in-obsidian-feasibility.md)); all needed surfaces browser-pathed; 1.2 MB minified; AGPL-3.0 spawns [Choose Obsen's license](tickets/024-choose-license.md).
 
 ## Frontier / open tickets
 
-Found by query, not listed here — open tickets in `docs/tickets/` with all blockers closed and no assignee. At charting time: [014 SDK-in-Obsidian feasibility](tickets/014-research-sdk-in-obsidian-feasibility.md) (the riskiest unknown — start here), [015 ancestor source](tickets/015-research-ancestor-source.md), [016 Filen socket events](tickets/016-research-filen-socket-events.md), [017 plugin guidelines + BRAT](tickets/017-research-plugin-guidelines-and-brat.md), [018 agent test harness](tickets/018-research-agent-test-harness.md) are all unblocked and parallelizable.
+Found by query, not listed here — open tickets in `docs/tickets/` with all blockers closed and no assignee. The riskiest unknown ([014 SDK-in-Obsidian feasibility](tickets/014-research-sdk-in-obsidian-feasibility.md)) is resolved; [015 ancestor source](tickets/015-research-ancestor-source.md), [016 Filen socket events](tickets/016-research-filen-socket-events.md), [017 plugin guidelines + BRAT](tickets/017-research-plugin-guidelines-and-brat.md), [018 agent test harness](tickets/018-research-agent-test-harness.md), and [024 choose license](tickets/024-choose-license.md) are all unblocked and parallelizable.
 
 ## Not yet specified
 

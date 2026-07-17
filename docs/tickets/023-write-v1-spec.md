@@ -4,7 +4,7 @@ title: "Write the Obsen v1 spec — the destination"
 labels: [wayfinder:task]
 status: open
 assignee:
-blocked_by: [17, 18, 21, 22]
+blocked_by: [17, 18, 21, 22, 24]
 ---
 
 ## Question
