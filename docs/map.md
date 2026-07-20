@@ -40,7 +40,7 @@ labels: [wayfinder:map]
 
 ## Frontier / open tickets
 
-Found by query, not listed here — open tickets in `docs/tickets/` with all blockers closed and no assignee. All research tickets are resolved; [019 on-device spike](tickets/019-prototype-on-device-spike.md), [020 sync-state schema](tickets/020-design-sync-state-schema.md), [024 choose license](tickets/024-choose-license.md), and [025 adopt SecretStorage?](tickets/025-adopt-secretstorage-for-credentials.md) are all unblocked and parallelizable; [022 settings/onboarding UX](tickets/022-design-settings-onboarding-ux.md) now waits on 025.
+Found by query, not listed here — open tickets in `docs/tickets/` with all blockers closed and no assignee. All research tickets are resolved. [019 on-device spike](tickets/019-prototype-on-device-spike.md) is claimed: the spike plugin is built and released (tag `0.0.1-spike.1`), awaiting the HITL on-device report. [020 sync-state schema](tickets/020-design-sync-state-schema.md), [024 choose license](tickets/024-choose-license.md), and [025 adopt SecretStorage?](tickets/025-adopt-secretstorage-for-credentials.md) remain unblocked and parallelizable; [022 settings/onboarding UX](tickets/022-design-settings-onboarding-ux.md) waits on 025.
 
 ## Not yet specified
 
