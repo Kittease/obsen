@@ -1,0 +1,20 @@
+{
+  "name": "obsen-spike",
+  "version": "0.0.1-spike.1",
+  "private": true,
+  "description": "THROWAWAY on-device spike for Obsen ticket 019 — not production code",
+  "scripts": {
+    "build": "esbuild main.ts --bundle --platform=browser --format=cjs --external:obsidian --define:global=globalThis --alias:os=./shims/os.js --alias:path=path-browserify --alias:stream=./shims/stream.js --alias:crypto=./shims/empty.js --alias:https=./shims/empty.js --alias:url=./shims/empty.js --alias:fs-extra=./shims/empty.js --alias:progress-stream=./shims/progress-stream.js --alias:events=events --inject:./shims/globals.js --minify --outfile=main.js",
+    "smoke": "node smoke.cjs"
+  },
+  "dependencies": {
+    "@filen/sdk": "0.4.2",
+    "buffer": "6.0.3",
+    "events": "3.3.0",
+    "path-browserify": "1.0.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1",
+    "obsidian": "^1.8.7"
+  }
+}

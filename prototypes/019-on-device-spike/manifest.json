@@ -1,0 +1,9 @@
+{
+  "id": "obsen-spike",
+  "name": "Obsen Spike",
+  "version": "0.0.1-spike.1",
+  "minAppVersion": "1.5.0",
+  "description": "Throwaway on-device spike proving the Filen SDK browser build runs inside Obsidian (Obsen wayfinder ticket 019). Not production code.",
+  "author": "obsen",
+  "isDesktopOnly": false
+}
