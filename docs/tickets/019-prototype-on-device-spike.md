@@ -2,7 +2,7 @@
 id: 19
 title: "Prototype: on-device spike — login, list, round-trip a file from Obsidian mobile"
 labels: [wayfinder:prototype]
-status: open
+status: closed
 assignee: camercey@gmail.com
 blocked_by: [14]
 ---
@@ -37,4 +37,12 @@ Use a **test vault** and preferably the dedicated Filen test account. Results ac
 
 ## Resolution
 
-_(pending — awaiting on-device results)_
+**Verdict: the SDK-with-patches approach works on a real phone.** Full protocol run on Android (2026-07-21, log reported from the device's `obsen-spike-log.md`); every step passed, no crash, no CORS error, no visible jank.
+
+- **Login**: email/password login completed in **2.8 s** (on-device key derivation included); the persisted auth config was restored across a full app kill+relaunch — twice.
+- **List**: remote root listing in **49–159 ms**.
+- **Round-trip**: 54 B note uploaded in ~0.8 s, downloaded in ~0.2 s, **byte-identical**; the downloaded copy landed in the vault correctly.
+- **E2EE transfer (8 MiB random)**: upload **3.2 s (~2.5 MiB/s)**, download **1.5 s (~5.3 MiB/s)**, byte-identical. Reported JS heap stayed flat at 20.7 MiB throughout (Chrome's `usedJSHeapSize` reads as quantized/low-signal here, but there was no OOM, kill, or stutter at this size). The ≤1 GB single-file worry from the [014 watch list](../research/014-sdk-in-obsidian-feasibility.md) remains open — 8 MiB is representative of notes, not of huge attachments.
+- **Foreground-resume**: `visibilitychange` fired reliably in **both** directions across many background/foreground cycles, including around an app kill — the resume-reconcile trigger is viable on Android.
+- **Bonus finding for the engine design**: the spike has no run guard, and a double-trigger produced **two interleaved concurrent runs** racing on the same remote file (both completed, by luck). The v1 engine must make sync runs single-flight — feeds [021 engine algorithm](021-design-sync-engine-algorithm.md).
+- **Not covered**: iOS (ticket scope was "iOS and/or Android"; iOS stays on the manual on-device checklist from the [018 harness research](../research/018-research-agent-test-harness.md)).
