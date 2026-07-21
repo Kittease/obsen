@@ -16,6 +16,8 @@ Specify the user-facing surface (informed by what the client can do, per [014](0
 - Sync feedback: status-bar indicator (idle/syncing/error/offline), notices policy (when to interrupt vs stay quiet), a sync-activity view or log file.
 - Error surfacing: auth expiry, quota full, network down — what the user sees and what they're asked to do.
 
+Constraints inherited from [020](020-design-sync-state-schema.md): the folder picker must store the linked Remote Folder by **UUID, not path** (folder UUIDs survive moves/renames; the sync state binds to that UUID); surface the manual **full re-hash recovery command**; and design the "linked folder no longer exists" error state (sync freezes — never mass-deletes).
+
 ## Resolution
 
 _(pending)_

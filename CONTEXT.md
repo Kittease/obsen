@@ -13,6 +13,10 @@ Glossary of the Obsen domain. Terms are canonical: code, tickets, and specs use 
 - **Live Sync** — event-driven incremental sync while the app is open: local vault events pushed remotely (debounced), remote socket events applied locally.
 - **Sync State** — the per-device record of what was last successfully synced (per-file identity, hashes, version references). Device-local, never synced itself.
 - **Ancestor** — the content of a file as of the last successful sync of that file; the base of a Three-Way Merge.
+- **Shadow Store** — the device-local, content-addressed store (keyed by `lastSyncedHash`, SHA-512) of last-synced text content; where Ancestors come from. Lives beside the Sync State, only Mergeable files get entries.
+- **Mergeable** — a per-file flag marking files eligible for Three-Way Merge (`.md`/`.txt` in v1; the allowlist is an engine constant). Snapshotted into the Sync State record when written; non-mergeable conflicts go straight to Conflict Copy.
+- **Sync Scope** — the predicate defining which paths participate in sync. All three Reconcile inputs (Sync State, local scan, remote listing) are filtered by it before diffing; out-of-scope content is invisible, never "missing". v1 scope = everything; per-subfolder selection is the documented end goal.
+- **Re-Bootstrap** — discarding the Sync State and re-entering First Link rules; the universal safe recovery from corrupt, lost, downgraded, or re-linked state. Loses Ancestors (divergence becomes Conflict Copies), never data.
 - **Three-Way Merge** — automatic merge of local and remote versions of a text file against their Ancestor; succeeds when edits don't overlap.
 - **Conflict** — the same file changed on both sides since the last sync (or same-path-different-content at First Link).
 - **Conflict Copy** — the non-destructive resolution of an unmergeable Conflict: both versions kept, the incoming one under a distinct name, recorded in the Conflict Manifest.
