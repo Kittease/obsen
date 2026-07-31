@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -133,6 +134,27 @@ describe("the production bundle", () => {
 
 		await plugin.onunload?.();
 		expect(plugin.filen).toBeNull();
+	});
+
+	it("carries a Sync Engine that works with only webview globals", async () => {
+		// The engine is not reachable from `main.ts` yet (its adapters arrive with
+		// tickets 028–029), so the gate bundles it directly rather than waiting to
+		// discover on a phone that WebCrypto hashing was the one thing missing.
+		const probe = await bundleSource(
+			"engine-probe",
+			[
+				`import { sha512Hex, SyncEngine } from ${JSON.stringify(join(repoRoot, "src/engine/index.ts"))};`,
+				"export const engineClass = typeof SyncEngine;",
+				"export const digest = sha512Hex(new TextEncoder().encode('obsen'));",
+			].join("\n"),
+		);
+		const { exports, requires } = await evaluateBundle(probe);
+
+		expect(requires).toEqual([]); // a pure-TS engine needs nothing at load
+		expect(exports.engineClass).toBe("function");
+		// Cross-checked against Node's implementation, which also proves the hex
+		// encoding: this digest is the Shadow Store key and the rename-pairing key.
+		expect(await exports.digest).toBe(createHash("sha512").update("obsen").digest("hex"));
 	});
 
 	it("has the SDK agree at runtime that it is in a browser", async () => {
