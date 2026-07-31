@@ -32,5 +32,7 @@ Glossary of the Obsen domain. Terms are canonical: code, tickets, and specs use 
 - **Own-Writes Filter** — the precise best-effort self-echo suppressor: (path, stat) map for the engine's local writes, recent-UUID set for its remote writes. An optimization only — idempotent reconcile is the correctness guarantee.
 - **Skip-and-Surface** — the planner's verdict for a path this platform cannot sync (unmaterializable filename, case collision): excluded from the plan but visibly reported, never silently dropped, never auto-renamed.
 - **Status Surface** — the engine's exposed state (`idle|syncing|offline|quota|auth-error|frozen` + per-run summary); the contract the settings/onboarding UX presents.
+- **Attention State** — a Status Surface state needing user awareness (`offline|quota|auth-error|frozen`). Always visible on the indicator; the ones requiring user action (`quota|auth-error|frozen`) additionally announce themselves once on entry and carry a recovery flow in settings.
+- **Device Name** — the user-editable, per-device label (platform-derived default) naming which device produced a Conflict Copy; device-local, never synced.
 - **Auth Config** — the reusable credential material exported by the Filen SDK after login (API key + master keys); stored device-local only.
 - **Supported Topology** — one sync engine per folder per device. Different engines on different devices sharing a Remote Folder is supported; two engines on the same device/folder is not.
