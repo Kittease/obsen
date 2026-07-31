@@ -43,17 +43,15 @@ labels: [wayfinder:map]
 - [Choose Obsen's license](tickets/024-choose-license.md) — AGPL-3.0-only, single license for the whole repo (no MIT split: nothing gained, a two-license story to explain); zero directory/BRAT friction; compliance = root LICENSE + `package.json` `"AGPL-3.0-only"` + README attribution of bundled `@filen/sdk`; no manifest field exists, no per-file headers.
 - [Adopt Obsidian's SecretStorage for Filen credentials?](tickets/025-adopt-secretstorage-for-credentials.md) — yes, SecretStorage only (no `data.json` copy): localStorage-backed and not disk-encrypted, but it removes the vault-tree leak class entirely; `minAppVersion: 1.11.4` hard floor (BRAT itself requires it); no `SecretComponent` — login form stays transient, auth config written programmatically post-login; supersedes [009](tickets/009-auth-and-credential-storage.md)'s at-rest wording with an honest residual-risk statement.
 - [Design: settings and onboarding UX](tickets/022-design-settings-onboarding-ux.md) — settings tab as state machine (logged out → unlinked → linked), no wizard; 2FA behind a switch; UUID-bound modal folder browser (tap selects, chevron descends; root gated by warning); First Link = static explain → scanned dry-run preview → confirm → normal non-blocking Run (needs a plan-only engine entry point); ribbon icon is the universal indicator + manual trigger (mobile has no status bar; desktop status-bar item is bonus); silent-by-default notices, one per attention-state entry; frozen recovers via "Check again"/Unlink, never folder recreation; Recent-activity list + opt-in rolling log + "Verify and repair" re-hash in settings; user-editable Device Name setting (platform default) feeds conflict-copy names.
+- [Write the Obsen v1 spec](tickets/023-write-v1-spec.md) — **the destination, reached**: the validated spec is [docs/specs/obsen-v1.md](specs/obsen-v1.md); it settles the last four open details (Exclusion List, Conflict Copy naming, `conflicts.md` lifecycle, "Obsen" ships as the beta name); the follow-on backlog is 15 tracer-bullet implementation tickets [026](tickets/026-impl-scaffold-and-build-gate.md)–[040](tickets/040-impl-on-device-checklist.md) (label `impl`).
 
 ## Frontier / open tickets
 
-Found by query, not listed here — open tickets in `docs/tickets/` with all blockers closed and no assignee. Every design decision is resolved: [Write the Obsen v1 spec](tickets/023-write-v1-spec.md) is the last ticket on the map.
+**The map is complete** — every wayfinder ticket is closed and the destination ([the v1 spec](specs/obsen-v1.md)) is reached. The open tickets remaining in `docs/tickets/` are the **implementation backlog** (label `impl`, tickets 026–040), the follow-on effort's queue: open, unassigned tickets whose `blocked_by` are all closed are grabbable, same claiming convention as before.
 
 ## Not yet specified
 
-- **Exact `.obsidian/` exclusion list** — the concrete file list beyond the agreed categories; settle during the sync-state/spec work.
-- **Conflict-copy naming convention** — the exact timestamp + Device Name filename format (the *source* of the device name is settled: a user-set setting, [022](tickets/022-design-settings-onboarding-ux.md)); settle in the spec.
-- **`conflicts.md` exact format and lifecycle** — table layout is decided; dedup of rows, behavior when the file itself conflicts, whether resolved rows are ever auto-pruned.
-- **Plugin display name** — manifest rules ban "Obsidian" and variations ("Obsi-"/"-sidian"); "Obsen" is neither literally but is Obsidian-evocative, and acceptance is reviewer discretion at directory submission. Not a beta blocker (names can change post-publication); settle in the spec ([017 research](research/017-plugin-guidelines-and-brat.md)).
+Nothing — the spec settled the last four items (exclusion list §2.1, conflict-copy naming §6.1, `conflicts.md` lifecycle §6.2, display name §10.1).
 
 ## Out of scope
 
