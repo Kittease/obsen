@@ -1,0 +1,37 @@
+{
+  "name": "obsen",
+  "version": "0.1.0",
+  "description": "Sync your vault with a Filen folder. End-to-end encrypted, two-way, on desktop and mobile.",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "main": "main.js",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "node build/build.ts --watch",
+    "build": "npm run typecheck && node build/build.ts --production",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run tests/unit",
+    "gate": "vitest run tests/gate",
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run gate"
+  },
+  "dependencies": {
+    "@filen/sdk": "0.4.2",
+    "buffer": "6.0.3",
+    "events": "3.3.0",
+    "path-browserify": "1.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "0.28.1",
+    "eslint": "^9.0.0",
+    "eslint-plugin-obsidianmd": "0.4.1",
+    "obsidian": "^1.8.7",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^3.0.0"
+  }
+}

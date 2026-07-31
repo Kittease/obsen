@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Lint, typecheck, tests, mobile-safety gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - run: npm ci
+
+      # Obsidian's plugin guidelines, in machine-readable form (spec §10.4).
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Layer 1 of the testing strategy (spec §9): headless, seconds.
+      - name: Unit tests
+        run: npm test
+
+      # Layer 2: the mobile-safety gate. A Node built-in anywhere in the bundle —
+      # ours or a dependency's — fails here instead of on a user's phone.
+      - name: Mobile-safety gate
+        run: npm run gate
