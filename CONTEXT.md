@@ -25,6 +25,12 @@ Glossary of the Obsen domain. Terms are canonical: code, tickets, and specs use 
 - **Soft Delete** — propagated deletions go to trash (Filen trash remotely, Obsidian trash behavior locally), never permanent removal.
 - **Exclusion List** — the built-in set of paths never synced (workspace files, Obsen's own data, caches), even though `.obsidian/` itself syncs.
 - **Sync Engine** — the pure-TypeScript core implementing all sync logic behind ports; testable headless.
-- **VaultPort / RemotePort** — the two interfaces isolating the Sync Engine from Obsidian and Filen respectively; production adapters on one side, in-memory fakes in tests.
+- **VaultPort / RemotePort / StorePort** — the three interfaces isolating the Sync Engine from Obsidian, Filen, and its own persistence (Sync State + Shadow Store) respectively; production adapters on one side, in-memory fakes in tests. Ports speak NFC-normalized paths; RemotePort ops address files by UUID.
+- **Run** — one single-flight execution of the reconcile machinery over a scope (the Dirty Set, or FULL). Every trigger produces a run; at most one executes at a time, and changes arriving mid-run land in the next one.
+- **Dirty Set** — the pending scope awaiting the next Run: paths marked by vault/socket events plus Rename Hints; requests coalesce here (FULL absorbs everything).
+- **Rename Hint** — an old→new path pair enqueued when a live Obsidian rename event fires; consumed first by the Run's pairing pass, pairing even when content also changed.
+- **Own-Writes Filter** — the precise best-effort self-echo suppressor: (path, stat) map for the engine's local writes, recent-UUID set for its remote writes. An optimization only — idempotent reconcile is the correctness guarantee.
+- **Skip-and-Surface** — the planner's verdict for a path this platform cannot sync (unmaterializable filename, case collision): excluded from the plan but visibly reported, never silently dropped, never auto-renamed.
+- **Status Surface** — the engine's exposed state (`idle|syncing|offline|quota|auth-error|frozen` + per-run summary); the contract the settings/onboarding UX presents.
 - **Auth Config** — the reusable credential material exported by the Filen SDK after login (API key + master keys); stored device-local only.
 - **Supported Topology** — one sync engine per folder per device. Different engines on different devices sharing a Remote Folder is supported; two engines on the same device/folder is not.
