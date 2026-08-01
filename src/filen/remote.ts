@@ -7,6 +7,7 @@ import type {
 	FolderMetadata,
 } from "@filen/sdk";
 
+import { errorMessage, SyncFault } from "../engine/errors";
 import { sha512Hex } from "../engine/hash";
 import { baseName, parentPath, toNfc } from "../engine/paths";
 import type { RemoteEntry, RemoteEvent, RemotePort } from "../engine/ports";
@@ -87,7 +88,10 @@ export class FilenRemote implements RemotePort {
 	private readonly index: SessionIndex;
 
 	constructor(params: { cloud: FilenCloud; rootUuid: string }) {
-		this.cloud = params.cloud;
+		// Wrapped once, here, rather than in ten `try`/`catch` blocks: classifying failures
+		// is a property of *every* call into Filen, and the engine is entitled to the
+		// taxonomy from all of them (spec §5.7).
+		this.cloud = classifyingFaults(params.cloud);
 		this.rootUuid = params.rootUuid;
 		this.index = new SessionIndex(params.rootUuid);
 	}
@@ -105,7 +109,19 @@ export class FilenRemote implements RemotePort {
 	 * a port that quietly dropped one would take the choice away from it.
 	 */
 	async listing(): Promise<RemoteEntry[]> {
-		const tree = await this.cloud.getDirectoryTree({ uuid: this.rootUuid, skipCache: true });
+		let tree: Record<string, CloudItemTree>;
+		try {
+			tree = await this.cloud.getDirectoryTree({ uuid: this.rootUuid, skipCache: true });
+		} catch (error) {
+			// A `folder_not_found` from *this* call is the Remote Folder itself, not something
+			// inside it — the one error that must never look like an empty listing.
+			throw isMissingFolder(error) ? missingRoot(this.rootUuid, error) : error;
+		}
+		// The folder the vault is linked to is always a key in its own tree. Missing means
+		// the UUID no longer resolves — trashed, or from a link that is no longer valid —
+		// and reading the result as a listing would say "every file was deleted there",
+		// which is the conclusion spec §5.7 exists to forbid.
+		if (!("/" in tree)) throw missingRoot(this.rootUuid, null);
 		this.index.rebuild();
 
 		const entries: RemoteEntry[] = [];
@@ -269,6 +285,78 @@ export class FilenRemote implements RemotePort {
 	watch(_onEvent: (event: RemoteEvent) => void): () => void {
 		return () => {};
 	}
+}
+
+/**
+ * Every call into Filen, with its failures translated into the engine's fault taxonomy
+ * (spec §5.7). A Proxy rather than per-method wrapping: the translation belongs to the
+ * boundary, not to any one call, and this way no future method can forget it.
+ *
+ * `APIError` carries the server's own `code`, and the SDK also raises
+ * `invalid_http_status_code` with the status in its message. Two of the five fault kinds
+ * are recognizable from that pair:
+ *
+ * - **auth** — a rejected API key, or a 401/403. Sync freezes until re-login.
+ * - **quota** — the account is out of room. Uploads stop; the rest keeps flowing.
+ *
+ * Matched by **pattern, not by an exact table**, deliberately: Filen's error codes are not
+ * part of the SDK's typed surface, so an exact list would be a guess that rots silently.
+ * Anything unrecognized stays `transient`, which costs a retry and a requeue and never
+ * costs content — the safe direction to be wrong in. Sharpening these against codes
+ * actually observed on a real account belongs to the on-device checklist (ticket 040).
+ */
+function classifyingFaults(cloud: FilenCloud): FilenCloud {
+	return new Proxy(cloud, {
+		get(target, property, receiver): unknown {
+			const value: unknown = Reflect.get(target, property, receiver);
+			if (typeof value !== "function") return value;
+			return (...args: unknown[]): unknown => {
+				const call = (): unknown => (value as (...rest: unknown[]) => unknown).apply(target, args);
+				// `downloadFileToReadableStream` returns a stream, not a promise, so the sync and
+				// async paths both have to be covered — and neither may change what it returns.
+				try {
+					const result = call();
+					return result instanceof Promise ? result.catch(rethrowClassified) : result;
+				} catch (error) {
+					return rethrowClassified(error);
+				}
+			};
+		},
+	});
+}
+
+const AUTH_CODE = /api[_-]?key|auth|token|forbidden|unauthorized|not[_-]?logged/i;
+const QUOTA_CODE = /storage|quota/i;
+const HTTP_AUTH_STATUS = /Invalid HTTP status code: (401|403)\b/;
+
+function rethrowClassified(error: unknown): never {
+	const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+	const message = errorMessage(error);
+	if (AUTH_CODE.test(code) || HTTP_AUTH_STATUS.test(message)) {
+		throw new SyncFault("auth", `Filen rejected the credentials — ${message}`, { cause: error });
+	}
+	if (QUOTA_CODE.test(code)) {
+		throw new SyncFault("quota", `the Filen account is out of room — ${message}`, { cause: error });
+	}
+	throw error;
+}
+
+/** Whether Filen said the folder it was asked about does not exist. */
+function isMissingFolder(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		error.code === "folder_not_found"
+	);
+}
+
+function missingRoot(rootUuid: string, cause: unknown): SyncFault {
+	return new SyncFault(
+		"missing-root",
+		`the Remote Folder ${rootUuid} could not be resolved on Filen`,
+		cause === null ? {} : { cause },
+	);
 }
 
 /**

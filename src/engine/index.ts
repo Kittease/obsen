@@ -13,6 +13,7 @@ export { CONFLICT_MANIFEST_PATH, DEFAULT_DEVICE_NAME, sanitizeDeviceName } from 
 export { ENGINE_CONSTANTS, engineConstants, type EngineConstants } from "./constants";
 export { SyncEngine, type SyncEngineOptions } from "./engine";
 export { type ExecutionReport, type TransferProgress } from "./execute";
+export { attentionFor, faultKind, SyncFault, type FaultKind } from "./errors";
 export { sha512Hex, type Hasher } from "./hash";
 export { ancestorPaths, fileExtension, isMergeable, parentPath, pathDepth, toNfc } from "./paths";
 export {
@@ -24,7 +25,6 @@ export {
 	type PlanCounts,
 	type PlanProgress,
 	type SideChange,
-	type SkipReason,
 } from "./plan";
 // Only the types an `Operation` is made of — the pairing pass itself is a planner
 // internal, and the modules that need it import it directly.
@@ -47,10 +47,13 @@ export {
 	type SyncState,
 } from "./state";
 export {
+	type AttentionState,
 	type EngineStatus,
 	type OpFailure,
 	type RunOutcome,
 	type RunSummary,
+	type SkipReason,
+	type SkipRecord,
 } from "./status";
 export type { Timers } from "./timers";
 export {

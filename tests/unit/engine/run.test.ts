@@ -145,7 +145,9 @@ describe("adds and edits converge (spec §5.2)", () => {
 		expect(listing[0]?.hash).toBeDefined();
 		remote.download = () => Promise.resolve(new TextEncoder().encode("swapped"));
 
-		const summary = await (await world.open()).syncNow("startup");
+		// Corrupt bytes could as easily be a bad transfer as a bad file, so the operation
+		// takes the whole transient ladder before it gives up (spec §5.7).
+		const summary = await world.pump((await world.open()).syncNow("startup"));
 
 		expect(summary.outcome).toBe("partial");
 		expect(summary.failures[0]?.path).toBe("Tampered.md");
@@ -487,7 +489,13 @@ describe("scope, skips and failures", () => {
 
 		const summary = await (await world.open()).syncNow("startup");
 
-		expect(summary.skipped).toBe(1);
+		expect(summary.skips).toEqual([
+			{
+				path: "Bad: name.md",
+				reason: "unwritable-path",
+				detail: "this platform cannot create a file with this name",
+			},
+		]);
 		expect(summary.downloaded).toBe(1);
 		expect(vault.paths()).toEqual(["Fine.md"]);
 	});
@@ -515,7 +523,7 @@ describe("scope, skips and failures", () => {
 			const summary = await sync.syncNow("manual");
 
 			expect(summary.downloaded).toBe(0);
-			expect(summary.skipped).toBe(1);
+			expect(summary.skips.map((skip) => skip.reason)).toEqual(["duplicate-remote-path"]);
 			expect(summary.outcome).toBe("partial");
 			// Nothing was even attempted against the stranger: keeping it would classify
 			// the path as remotely modified and try to fetch a file the engine never saw.
@@ -544,7 +552,7 @@ describe("scope, skips and failures", () => {
 		remote.upload = (path, data) =>
 			path === "Bad.md" ? Promise.reject(new Error("nope")) : realUpload(path, data);
 
-		const summary = await (await world.open()).syncNow("startup");
+		const summary = await world.pump((await world.open()).syncNow("startup"));
 
 		expect(summary.outcome).toBe("partial");
 		expect(summary.uploaded).toBe(1);

@@ -23,6 +23,12 @@ export type RunRequest = {
 	trigger: RunTrigger;
 	scope: RunScope;
 	hints?: readonly RenameHint[];
+	/**
+	 * Lifts an offline backoff instead of waiting it out (spec §5.7). The caller decides:
+	 * the ladder is there to absorb event bursts, so only a correctness backstop or an
+	 * explicit user action is entitled to skip it.
+	 */
+	cutThrough?: boolean;
 };
 
 /**
@@ -31,7 +37,11 @@ export type RunRequest = {
  * (spec §5.1 step 1), so what the runner receives is a set that is no longer pending.
  */
 export type DirtySet = {
-	/** Every trigger that merged in, in arrival order — coalescing is real, so one label would lie. */
+	/**
+	 * Every trigger that merged in, in arrival order and each named once — coalescing is
+	 * real, so one label would lie, and a Run requeued down the backoff ladder would
+	 * otherwise repeat itself for as long as the remote stayed down.
+	 */
 	triggers: RunTrigger[];
 	scope: RunScope;
 	hints: RenameHint[];
@@ -56,6 +66,8 @@ export class RunScheduler<R> {
 	private due = false;
 	private cancelDebounce: (() => void) | null = null;
 	private debounceDeadline: number | null = null;
+	/** The armed offline backoff, if any — see {@link holdFor}. */
+	private cancelHold: (() => void) | null = null;
 	private running: Promise<void> | null = null;
 	private idleWaiters: (() => void)[] = [];
 	private disposed = false;
@@ -84,15 +96,7 @@ export class RunScheduler<R> {
 			return waiter.promise;
 		}
 
-		const dirty = this.dirty ?? { triggers: [], scope: request.scope, hints: [], waiters: [] };
-		dirty.scope = this.dirty ? mergeScopes(dirty.scope, request.scope) : request.scope;
-		dirty.triggers.push(request.trigger);
-		for (const hint of request.hints ?? []) {
-			const known = dirty.hints.some((h) => h.from === hint.from && h.to === hint.to);
-			if (!known) dirty.hints.push({ ...hint });
-		}
-		dirty.waiters.push(waiter);
-		this.dirty = dirty;
+		this.enqueue({ triggers: [request.trigger], ...request }, waiter);
 
 		if (request.scope.kind === "full") {
 			// A FULL request cuts through any waiting debounce and absorbs its paths.
@@ -101,9 +105,48 @@ export class RunScheduler<R> {
 		} else if (!this.due) {
 			this.armDebounce();
 		}
+		if (request.cutThrough === true) this.release();
 
 		this.tryStart();
 		return waiter.promise;
+	}
+
+	/**
+	 * Puts a Run's own Dirty Set back — the offline retry (spec §5.7). No waiter: the Run
+	 * that produced it has already reported its outcome to everyone who asked, and this is
+	 * the engine deciding the work is still owed rather than a new caller asking for it.
+	 */
+	requeue(dirty: DirtySet): void {
+		if (this.disposed) return;
+		this.enqueue(dirty, null);
+		// Already admitted once, so it does not queue behind a fresh debounce; what holds
+		// it now is the backoff.
+		this.due = true;
+	}
+
+	/** Whether a backoff is holding the next Run off. */
+	get held(): boolean {
+		return this.cancelHold !== null;
+	}
+
+	/**
+	 * Holds the next Run off for `ms` (spec §5.7). Requests keep coalescing into the Dirty
+	 * Set meanwhile and do **not** re-arm it — absorbing a burst without restarting the
+	 * ladder is the whole point — so only {@link release} and the next expiry end it.
+	 */
+	holdFor(ms: number): void {
+		if (this.disposed) return;
+		this.release();
+		this.cancelHold = this.options.timers.after(ms, () => {
+			this.cancelHold = null;
+			this.tryStart();
+		});
+	}
+
+	/** Lifts a hold now: what a cut-through request does. Safe when nothing is held. */
+	release(): void {
+		this.cancelHold?.();
+		this.cancelHold = null;
 	}
 
 	/** Resolves when no Run is executing and nothing is pending. */
@@ -120,6 +163,7 @@ export class RunScheduler<R> {
 	dispose(): void {
 		this.disposed = true;
 		this.clearDebounce();
+		this.release();
 		const dirty = this.dirty;
 		this.dirty = null;
 		this.due = false;
@@ -127,6 +171,24 @@ export class RunScheduler<R> {
 			waiter.reject(new Error("Obsen: sync engine stopped"));
 		}
 		this.notifyIdle();
+	}
+
+	/** Merges one request into the pending Dirty Set: union of scopes, hints and triggers. */
+	private enqueue(
+		request: { triggers: readonly RunTrigger[]; scope: RunScope; hints?: readonly RenameHint[] },
+		waiter: Deferred<R> | null,
+	): void {
+		const dirty = this.dirty ?? { triggers: [], scope: request.scope, hints: [], waiters: [] };
+		dirty.scope = this.dirty ? mergeScopes(dirty.scope, request.scope) : request.scope;
+		for (const trigger of request.triggers) {
+			if (!dirty.triggers.includes(trigger)) dirty.triggers.push(trigger);
+		}
+		for (const hint of request.hints ?? []) {
+			const known = dirty.hints.some((h) => h.from === hint.from && h.to === hint.to);
+			if (!known) dirty.hints.push({ ...hint });
+		}
+		if (waiter) dirty.waiters.push(waiter);
+		this.dirty = dirty;
 	}
 
 	private armDebounce(): void {
@@ -153,7 +215,7 @@ export class RunScheduler<R> {
 	}
 
 	private tryStart(): void {
-		if (this.disposed || this.running || !this.dirty || !this.due) return;
+		if (this.disposed || this.running || !this.dirty || !this.due || this.held) return;
 
 		// Snapshot-and-clear (spec §5.1 step 1): anything arriving from here on is the
 		// next Run's problem, never a mutation of the plan this one is about to compute.
@@ -167,22 +229,27 @@ export class RunScheduler<R> {
 			scope: dirty.scope,
 			hints: dirty.hints,
 		};
-		this.running = this.options
-			.run(snapshot)
-			.then(
-				(result) => {
-					for (const waiter of dirty.waiters) waiter.resolve(result);
-				},
-				(error: unknown) => {
-					for (const waiter of dirty.waiters) waiter.reject(error);
-				},
-			)
-			.then(() => {
+		// The Run is marked finished *before* its requesters are told, so a caller that
+		// awaits a summary and then asks whether anything is still running gets the answer
+		// that summary implies. The assignment lands first either way: the function below
+		// only reaches its own body's tail after an `await`.
+		this.running = (async () => {
+			let result: R;
+			try {
+				result = await this.options.run(snapshot);
+			} catch (error) {
 				this.running = null;
-				// Whatever arrived during the Run becomes the follow-up Run.
+				for (const waiter of dirty.waiters) waiter.reject(error);
 				this.tryStart();
 				this.notifyIdle();
-			});
+				return;
+			}
+			this.running = null;
+			for (const waiter of dirty.waiters) waiter.resolve(result);
+			// Whatever arrived during the Run becomes the follow-up Run.
+			this.tryStart();
+			this.notifyIdle();
+		})();
 	}
 
 	private isSettled(): boolean {

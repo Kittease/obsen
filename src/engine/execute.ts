@@ -5,7 +5,7 @@ import {
 	type ConflictRow,
 } from "./conflict";
 import type { EngineConstants } from "./constants";
-import { errorMessage } from "./errors";
+import { attentionFor, errorMessage, SyncFault } from "./errors";
 import type { Hasher } from "./hash";
 import { mergeText } from "./merge";
 import { isMergeable } from "./paths";
@@ -13,7 +13,7 @@ import type { RemotePort, Stat, StorePort, VaultPort } from "./ports";
 import type { OpOf, Operation, Plan } from "./plan";
 import type { ShadowStore } from "./shadow";
 import { flushState, type FileRecord, type SyncState } from "./state";
-import type { OpFailure } from "./status";
+import type { OpFailure, SkipRecord } from "./status";
 import { decodeUtf8, encodeUtf8 } from "./text";
 import type { Timers } from "./timers";
 
@@ -67,12 +67,25 @@ export type ExecutionReport = {
 	conflicts: number;
 	/** Whether those rows actually reached `conflicts.md`; the shell opens it if so. */
 	manifestWritten: boolean;
-	skipped: number;
-	/** Paths the re-stat guard refused to touch; the engine re-dirties them. */
+	/** Skip-and-Surfaces: the planner's, plus every operation the remote refused (§5.8). */
+	skips: SkipRecord[];
+	/** Whether the account ran out of room, so uploads stopped and everything else did not. */
+	quotaBlocked: boolean;
+	/** Paths the re-stat guard refused to touch; the engine re-dirties them at once. */
 	requeue: string[];
+	/**
+	 * Paths a fault outlived — the engine re-dirties these too, but *behind the offline
+	 * backoff*, so a remote that is failing does not get hit again on the 2 s debounce.
+	 */
+	deferred: string[];
 	/** Files this Run wrote locally that still have to be pushed — the manifest. */
 	followUp: string[];
 	failures: OpFailure[];
+	/**
+	 * The fault that ended the Run early, if one did, and the Attention State it puts sync
+	 * into. Nothing after it was attempted; every path it stopped is in {@link deferred}.
+	 */
+	abort: { attention: "auth-error" | "frozen"; message: string } | null;
 };
 
 export async function executePlan(input: ExecuteInput): Promise<ExecutionReport> {
@@ -86,11 +99,19 @@ export async function executePlan(input: ExecuteInput): Promise<ExecutionReport>
 		merged: 0,
 		conflicts: 0,
 		manifestWritten: false,
-		skipped: 0,
+		// Every skip the planner already decided on (spec §5.8); the phases below add the
+		// ones only an attempt can discover.
+		skips: input.plan.operations
+			.filter((operation): operation is OpOf<"skip"> => operation.kind === "skip")
+			.map(({ path, reason, detail }) => ({ path, reason, detail })),
+		quotaBlocked: false,
 		requeue: [],
+		deferred: [],
 		followUp: [],
 		failures: [],
+		abort: null,
 	};
+	const faults = new FaultPolicy(input, report);
 	let lastFlush = input.timers.now();
 	const flush = async (): Promise<void> => {
 		report.stateChanged = true;
@@ -101,23 +122,23 @@ export async function executePlan(input: ExecuteInput): Promise<ExecutionReport>
 	// Phase 1 — folders, parents first. Sequential: a transfer whose parent folder is
 	// missing fails, so this is not a place to save milliseconds.
 	for (const operation of operations(input.plan, "mkdir-remote")) {
-		await attempt(operation.path, report, () => input.remote.mkdir(operation.path));
+		await faults.attempt(operation.path, () => input.remote.mkdir(operation.path));
 	}
 	for (const operation of operations(input.plan, "mkdir-local")) {
-		await attempt(operation.path, report, () => input.vault.mkdir(operation.path));
+		await faults.attempt(operation.path, () => input.vault.mkdir(operation.path));
 	}
 
 	// Phase 2 — moves and renames. Each op performs its port call *then* rekeys, so a
 	// failed move leaves the old record and the next Run simply pairs it again.
 	for (const operation of operations(input.plan, "move-folder")) {
-		await attempt(operation.to, report, async () => {
+		await faults.attempt(operation.to, async () => {
 			await input.remote.moveFolder(operation.from, operation.to);
 			for (const file of operation.files) rekey(input.state, file.from, file.to, file.record);
 			report.moved += operation.files.length;
 		});
 	}
 	for (const operation of operations(input.plan, "move")) {
-		await attempt(operation.to, report, () => move(operation, input, report));
+		await faults.attempt(operation.to, () => move(operation, input, report));
 	}
 	if (report.moved > 0) await flush();
 
@@ -160,7 +181,19 @@ export async function executePlan(input: ExecuteInput): Promise<ExecutionReport>
 	const recordedBefore = recorded();
 	let done = 0;
 	await inParallel(transfers, input.constants.transferConcurrency, async (operation) => {
-		await attempt(operation.path, report, () =>
+		// Quota blocks uploads only (spec §5.7). A `download` still lands; anything that has
+		// to push bytes — an upload, a merge, a Conflict Copy — waits for room, and waits
+		// *without asking again*, since the answer for this Run is already known.
+		//
+		// A Conflict waits **whole**, local write included, even though that write would
+		// succeed: a resolution that writes its Conflict Copy and then cannot push it is
+		// only half done, and half-done is the expensive half. Deferring it leaves both
+		// versions exactly where they are, on both sides, and costs nothing but latency.
+		if (report.quotaBlocked && operation.kind !== "download") {
+			faults.defer(operation.path);
+			return;
+		}
+		await faults.attempt(operation.path, () =>
 			operation.kind === "conflict"
 				? resolve(operation, input, report, copies)
 				: transfer(operation, input, report),
@@ -173,19 +206,19 @@ export async function executePlan(input: ExecuteInput): Promise<ExecutionReport>
 	});
 	// The manifest is written once, after every copy this Run makes is on disk — so a
 	// conflict on `conflicts.md` itself resolves first and its rows land on the winner.
-	await attempt(CONFLICT_MANIFEST_PATH, report, () => copies.writeManifest(report));
+	await faults.attempt(CONFLICT_MANIFEST_PATH, () => copies.writeManifest(report));
 	if (recorded() > recordedBefore) await flush();
 
 	// Phase 4 — file deletes, soft on both sides (spec §5.2, ticket 007).
 	for (const operation of operations(input.plan, "trash-remote")) {
-		await attempt(operation.path, report, async () => {
+		await faults.attempt(operation.path, async () => {
 			await input.remote.trashFile(operation.uuid);
 			input.state.files.delete(operation.path);
 			report.deleted += 1;
 		});
 	}
 	for (const operation of operations(input.plan, "trash-local")) {
-		await attempt(operation.path, report, async () => {
+		await faults.attempt(operation.path, async () => {
 			// The re-stat guard (spec §5.5): an edit that landed since classification is a
 			// change no one has merged, and trashing it would destroy it outright.
 			if (await changedSince(input.vault, operation.path, operation.stat)) {
@@ -202,14 +235,12 @@ export async function executePlan(input: ExecuteInput): Promise<ExecutionReport>
 	// Phase 5 — the folders those deletes emptied. No records are involved: Obsen keeps
 	// none for folders, which is why an empty folder simply stops existing.
 	for (const operation of operations(input.plan, "trash-folder-remote")) {
-		await attempt(operation.path, report, () => input.remote.trashFolder(operation.path));
+		await faults.attempt(operation.path, () => input.remote.trashFolder(operation.path));
 	}
 	for (const operation of operations(input.plan, "trash-folder-local")) {
-		await attempt(operation.path, report, () => input.vault.trashFolder(operation.path));
+		await faults.attempt(operation.path, () => input.vault.trashFolder(operation.path));
 	}
 
-	// Skips are decided at planning time, so they come straight from the plan.
-	report.skipped = input.plan.counts.skipped;
 	return report;
 }
 
@@ -342,16 +373,22 @@ async function resolve(
 	// No safe merge: the incoming version becomes the Conflict Copy and the local one
 	// keeps the original path (spec §6.1). The copy is written *first*, so a failure
 	// half way through can only ever leave an extra file behind.
-	const copyPath = await copies.reserve(path);
+	const { path: copyPath, adopted } = await copies.reserve(path, incoming, incomingHash);
 	if (!vault.isWritablePath(copyPath)) {
-		throw new Error(`this platform cannot create the Conflict Copy name ${copyPath}`);
+		// Skip-and-Surface (spec §5.8), not a retry and not a different name: the copy's
+		// name is the record of what happened, and both versions are still where they were.
+		throw new SyncFault(
+			"rejected",
+			`this platform cannot create the Conflict Copy name ${copyPath}`,
+			{ reason: "unwritable-path" },
+		);
 	}
 	const copyStat = await vault.write(copyPath, incoming);
-	// Counted and listed the moment the copy exists on disk, before anything that could
-	// still fail: a copy the manifest never mentions would be exactly the silent
-	// conflict spec §6.2 exists to prevent.
-	copies.record(path, copyPath);
-	report.conflicts += 1;
+	// Listed the moment the copy exists on disk, before anything that could still fail: a
+	// copy the manifest never mentions would be exactly the silent conflict spec §6.2
+	// exists to prevent. Counted only when this Run is the one that made it — an adopted
+	// copy is an earlier Run's, being finished rather than created.
+	if (copies.record(path, copyPath) && !adopted) report.conflicts += 1;
 
 	const copy = await remote.upload(copyPath, incoming);
 	await commit(input, copyPath, {
@@ -400,14 +437,38 @@ async function threeWayMerge(
  * Naming has to dodge every path either side already holds *and* the copies this Run
  * has already promised: a name free in the vault but taken on Filen would upload
  * straight over a file this device has never seen.
+ *
+ * It also has to be **stable for the same conflict**, because a resolution that fails
+ * half-way is retried — within the Run by the fault ladder, and across Runs because the
+ * Reconcile still sees the same divergence (spec §5.5, §5.7). Naming freshly each time
+ * would answer one conflict with a pile of identical copies, so two things pin it down:
+ * a reservation is remembered per original path, and a candidate name already holding
+ * *exactly the incoming bytes* is adopted rather than stepped over.
  */
+type Reservation = {
+	path: string;
+	/** The copy was already on disk holding exactly these bytes — an earlier Run wrote it. */
+	adopted: boolean;
+};
+
 class ConflictCopies {
 	private readonly reserved = new Set<string>();
+	/** The copy each original path was promised, so a retry reuses it instead of adding one. */
+	private readonly assigned = new Map<string, Reservation>();
 	private readonly rows: ConflictRow[] = [];
 
 	constructor(private readonly input: ExecuteInput) {}
 
-	async reserve(path: string): Promise<string> {
+	/** The name for `path`'s copy, and whether it was already sitting there holding it. */
+	async reserve(
+		path: string,
+		incoming: Uint8Array,
+		incomingHash: string,
+	): Promise<Reservation> {
+		const promised = this.assigned.get(path);
+		if (promised !== undefined) return promised;
+		let adopted = false;
+
 		const name = (): string =>
 			conflictCopyPath(path, {
 				at: this.input.timers.now(),
@@ -418,16 +479,33 @@ class ConflictCopies {
 		let candidate = name();
 		// The vault has no listing here — a scoped Run never scanned it — so local
 		// collisions are probed one name at a time.
-		while ((await this.input.vault.stat(candidate)) !== null) {
+		for (;;) {
+			const stat = await this.input.vault.stat(candidate);
+			if (stat === null) break;
+			// This copy already exists *and* holds exactly the version being copied: an
+			// earlier Run wrote it and then failed before it could finish. Adopting it is what
+			// keeps the redo from answering one conflict with two identical notes.
+			if (stat.size === incoming.length) {
+				const existing = await this.input.vault.read(candidate);
+				if ((await this.input.hash(existing)) === incomingHash) {
+					adopted = true;
+					break;
+				}
+			}
 			this.reserved.add(candidate);
 			candidate = name();
 		}
 		this.reserved.add(candidate);
-		return candidate;
+		const reservation: Reservation = { path: candidate, adopted };
+		this.assigned.set(path, reservation);
+		return reservation;
 	}
 
-	record(original: string, copy: string): void {
+	/** Files the row. `false` when it was already filed — a retried resolution. */
+	record(original: string, copy: string): boolean {
+		if (this.rows.some((row) => row.original === original && row.copy === copy)) return false;
 		this.rows.push({ original, copy });
+		return true;
 	}
 
 	/**
@@ -453,7 +531,11 @@ class ConflictCopies {
 		const rows = [...this.rows].sort(
 			(a, b) => a.original.localeCompare(b.original) || a.copy.localeCompare(b.copy),
 		);
-		await vault.write(CONFLICT_MANIFEST_PATH, encodeUtf8(appendConflictRows(existing, rows)));
+		const next = appendConflictRows(existing, rows);
+		// Every row was already listed — a redone resolution that adopted the copy an
+		// earlier Run left behind. The announcement has already happened.
+		if (next === existing) return;
+		await vault.write(CONFLICT_MANIFEST_PATH, encodeUtf8(next));
 		report.manifestWritten = true;
 		// A local write like any other: the next Run pushes it.
 		report.followUp.push(CONFLICT_MANIFEST_PATH);
@@ -531,21 +613,81 @@ function operations<K extends Operation["kind"]>(plan: Plan, kind: K): OpOf<K>[]
 }
 
 /**
- * Runs one operation, keeping a single bad file from blocking the vault (spec §5.7).
- * Retries and requeueing into the pending scope arrive with ticket 036; until then a
- * failure is reported and the path waits for the next FULL Reconcile — startup or
- * Foreground-Resume — since nothing re-dirties it.
+ * The Run's error policy (spec §5.7): what each {@link FaultKind} costs, in the one
+ * place every operation passes through.
+ *
+ * The guiding rule is **one bad file never blocks the vault** — so a fault stops its own
+ * operation and, at most, the class of operations that cannot possibly succeed either.
+ * Two kinds are Run-wide facts rather than per-path ones: `quota` stops later uploads
+ * without asking again, and `auth`/`missing-root` stop the Run outright, because every
+ * remaining operation would fail the same way and hammering a remote that has already
+ * said no is worse than waiting.
+ *
+ * Those facts live on the {@link ExecutionReport} rather than in this object, because each
+ * of them is something the Run has to *report*: this is the policy over that record, not a
+ * second copy of it.
+ *
+ * Nothing here rethrows. A path that could not be finished lands in `deferred` or
+ * `skips`, the phases run to completion, and the engine decides what that means for the
+ * Status Surface and for the next Run.
  */
-async function attempt(
-	path: string,
-	report: ExecutionReport,
-	operation: () => Promise<void>,
-): Promise<void> {
-	try {
-		await operation();
-	} catch (error) {
-		report.failures.push({ path, message: errorMessage(error) });
+class FaultPolicy {
+	constructor(
+		private readonly input: ExecuteInput,
+		private readonly report: ExecutionReport,
+	) {}
+
+	/** Hands a path to the next Run, which the engine will hold behind the backoff. */
+	defer(path: string): void {
+		this.report.deferred.push(path);
 	}
+
+	async attempt(path: string, operation: () => Promise<void>): Promise<void> {
+		const { transientAttempts, transientDelaysMs } = this.input.constants;
+		for (let attempt = 1; ; attempt += 1) {
+			// A Run that has already met an unsurvivable fault attempts nothing more; the
+			// paths it never reached are still owed a Run, so they defer rather than vanish.
+			if (this.report.abort !== null) return this.defer(path);
+			try {
+				await operation();
+				return;
+			} catch (error) {
+				const fault = error instanceof SyncFault ? error : null;
+				const kind = fault?.kind ?? "transient";
+				const message = errorMessage(error);
+				const attention = attentionFor(kind);
+				if (attention !== null) {
+					this.report.abort = { attention, message };
+					return this.defer(path);
+				}
+				if (kind === "quota") {
+					this.report.quotaBlocked = true;
+					return this.defer(path);
+				}
+				// Skip-and-Surface: reported so the user can act, never retried, and never
+				// worked around by inventing a different name (spec §5.8).
+				if (fault !== null && kind === "rejected") {
+					this.report.skips.push({ path, reason: fault.reason, detail: message });
+					return;
+				}
+				if (attempt >= transientAttempts) {
+					this.report.failures.push({ path, message });
+					return this.defer(path);
+				}
+				// The ladder is indexed by the gap being waited out, not by the attempt: the
+				// first delay follows the first failure.
+				const wait = transientDelaysMs[attempt - 1] ?? transientDelaysMs.at(-1) ?? 0;
+				await sleep(this.input.timers, wait);
+			}
+		}
+	}
+}
+
+/** A pause on the injected clock, so a headless Run never actually waits. */
+function sleep(timers: Timers, ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		timers.after(ms, resolve);
+	});
 }
 
 /** Bounded-concurrency map; the operations are independent, so order is irrelevant. */

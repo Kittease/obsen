@@ -187,7 +187,8 @@ describe("Conflict Copies (spec §6.1)", () => {
 
 		await vault.put("Daily.md", doc("# Daily", "", "- here", ""));
 		await remote.put("Daily.md", doc("# Daily", "", "- there", ""));
-		const summary = await sync.syncNow("manual");
+		// The push takes the whole transient retry ladder before it is called a failure.
+		const summary = await world.pump(sync.syncNow("manual"));
 
 		// The copy exists on disk, so it is counted and listed — a copy the manifest
 		// never mentions would be exactly the silent conflict §6.2 exists to prevent.
@@ -195,6 +196,36 @@ describe("Conflict Copies (spec §6.1)", () => {
 		expect(summary.failures).toHaveLength(1);
 		expect(vault.text(copyOf("Daily.md"))).toBe(doc("# Daily", "", "- there", ""));
 		expect(vault.text(CONFLICT_MANIFEST_PATH)).toContain(copyOf("Daily.md").slice(0, -3));
+	});
+
+	it("adopts the copy a failed resolution left behind instead of making a second one", async () => {
+		const sync = await linked();
+		const upload = remote.upload.bind(remote);
+		let broken = true;
+		remote.upload = (path, data) =>
+			broken && path.includes("(conflict ")
+				? Promise.reject(new Error("nope"))
+				: upload(path, data);
+
+		await vault.put("Daily.md", doc("# Daily", "", "- here", ""));
+		await remote.put("Daily.md", doc("# Daily", "", "- there", ""));
+		await world.pump(sync.syncNow("manual"));
+
+		// The copy is on disk and listed, but was never pushed — so the next Reconcile still
+		// sees the same divergence and resolves it again (spec §5.5). That redo must adopt
+		// this copy: a second identical note, and a second row, would be the retry ladder
+		// littering the vault.
+		broken = false;
+		const redone = await world.pump(sync.syncNow("manual"));
+
+		expect(redone.conflicts).toBe(0);
+		expect(vault.paths()).toEqual([copyOf("Daily.md"), "Daily.md", CONFLICT_MANIFEST_PATH]);
+		const rows = (vault.text(CONFLICT_MANIFEST_PATH) ?? "")
+			.split("\n")
+			.filter((line) => line.includes("(conflict "));
+		expect(rows).toHaveLength(1);
+		await world.settle(sync);
+		world.expectAgreement();
 	});
 
 	it("resolves every conflict in a Run, not just the first", async () => {

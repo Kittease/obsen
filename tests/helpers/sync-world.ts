@@ -37,6 +37,12 @@ export type SyncWorld = {
 	 * starts.
 	 */
 	dirtyRun(sync: SyncEngine, paths: string[], hints?: RenameHint[]): Promise<RunSummary>;
+	/**
+	 * Awaits a Run that sleeps mid-flight — a retry delay, an offline backoff rung —
+	 * by firing armed timers one at a time until it settles. The Run must be *started*
+	 * before this is called, never awaited, or the clock it is waiting on never moves.
+	 */
+	pump<T>(pending: Promise<T>): Promise<T>;
 	/** Runs whatever the engine queued for itself — a follow-up Run, and its own. */
 	settle(sync: SyncEngine): Promise<void>;
 	/** Both sides hold exactly these paths, with identical content. */
@@ -72,6 +78,24 @@ export function createWorld(): SyncWorld {
 			const summary = sync.markDirty(paths, "vault-event", hints);
 			await clock.advance(ENGINE_CONSTANTS.eventDebounceMs);
 			return summary;
+		},
+		async pump(pending) {
+			let settled = false;
+			const done = (): void => {
+				settled = true;
+			};
+			pending.then(done, done);
+			// Timers first, then a real event-loop turn: the Run's own async work has to get
+			// far enough to arm the next timer, and a microtask flush never reaches the Shadow
+			// Store's genuinely asynchronous compression.
+			const turns = 500; // far more than any Run needs; a bound, not a budget
+			for (let turn = 0; turn < turns && !settled; turn += 1) {
+				if (!(await clock.advanceToNext())) await new Promise((tick) => setTimeout(tick, 0));
+			}
+			// Returning the unsettled promise here would hand the test a timeout to read
+			// instead of the loop that actually gave up.
+			if (!settled) throw new Error(`pump: the Run did not settle in ${turns} turns`);
+			return pending;
 		},
 		async settle(sync) {
 			// A Run can queue a Run — resolving a Conflict writes the manifest, which then

@@ -6,13 +6,17 @@ import type { RunTrigger } from "./triggers";
  * (ribbon, status bar, settings) renders *this* rather than keeping its own idea of
  * what sync is doing.
  *
- * `offline`, `quota`, `auth-error` and `frozen` are the **Attention States**. The flows
- * that enter and recover from them arrive with the resilience slice (ticket 036), and
- * the notices and badges that act on the distinction with the status-surface UX
- * (ticket 037) — which is why only the `offline` a failed remote listing produces is
- * reachable today.
+ * `offline`, `quota`, `auth-error` and `frozen` are the **Attention States**, and every
+ * one of them is derived from the Run that just ended rather than latched: a Run that
+ * lists, uploads and finishes clean *is* the recovery. The one exception is
+ * `auth-error`, which survives across Runs because only a re-login can clear it —
+ * `SyncEngine.credentialsRestored()`. The notices and badges that act on the distinction
+ * are the status-surface UX's (ticket 037).
  */
 export type EngineStatus = "idle" | "syncing" | "offline" | "quota" | "auth-error" | "frozen";
+
+/** The four states of {@link EngineStatus} that need the user to know something. */
+export type AttentionState = "offline" | "quota" | "auth-error" | "frozen";
 
 export type RunOutcome =
 	/** Everything planned was done — Conflicts included; a resolved Conflict is work done. */
@@ -21,10 +25,33 @@ export type RunOutcome =
 	| "partial"
 	/** The remote listing itself failed — nothing was planned. */
 	| "offline"
+	/**
+	 * The Run never started: sync is in an Attention State only the user can clear, so
+	 * running would have meant hammering a remote that has already said no.
+	 */
+	| "blocked"
 	/** The Run could not be planned for a local reason. */
 	| "failed";
 
 export type OpFailure = { path: string; message: string };
+
+/** Why a path was Skip-and-Surfaced (spec §5.8). */
+export type SkipReason =
+	/** The local platform cannot materialize the name — Windows-reserved, `:`, `|`, … */
+	| "unwritable-path"
+	/** Two remote files hold one path; the tracked one syncs and the other is reported. */
+	| "duplicate-remote-path"
+	/** Two remote paths differ only in case, which most vaults cannot hold at once. */
+	| "case-collision"
+	/** The remote refused the operation permanently. */
+	| "remote-rejected";
+
+/**
+ * One Skip-and-Surface, as the Recent-activity list shows it. A skip is never retried
+ * and never auto-renamed (spec §5.8) — reporting it *is* the resolution, which is why
+ * it carries a sentence a user can act on rather than a code.
+ */
+export type SkipRecord = { path: string; reason: SkipReason; detail: string };
 
 /** Per-run summary: what the Recent-activity list and the last-run line are made of. */
 export type RunSummary = {
@@ -53,12 +80,26 @@ export type RunSummary = {
 	 * manifest has something to say in Recent activity rather than a file worth opening.
 	 */
 	manifestWritten: boolean;
-	/** Paths the re-stat guard refused to touch; re-dirtied for the next Run. */
+	/**
+	 * Paths this Run handed to the next one: what the re-stat guard refused to touch,
+	 * and what a fault outlived its retries on. Not a failure count — work outstanding.
+	 */
 	requeued: number;
-	skipped: number;
+	/** Skip-and-Surfaces, with the reason each one needs to be acted on (spec §5.8). */
+	skips: readonly SkipRecord[];
 	/** Per-operation failures: one bad file never blocks the rest of the vault. */
 	failures: readonly OpFailure[];
-	/** Why the Run as a whole could not proceed (`offline`, `failed`); `null` otherwise. */
+	/**
+	 * The Attention State this Run ended in, or `null` for one that needs nothing. Kept on
+	 * the record rather than read off the live status, because the Recent-activity list
+	 * (spec §8.7) shows past Runs, and "offline" and "frozen" are the same `outcome` with
+	 * very different things to tell the user.
+	 */
+	attention: AttentionState | null;
+	/**
+	 * Why the Run as a whole could not proceed (`offline`, `blocked`, `failed`); `null`
+	 * otherwise.
+	 */
 	error: string | null;
 };
 

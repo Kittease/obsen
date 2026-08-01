@@ -358,3 +358,61 @@ describe("watch", () => {
 		}).not.toThrow();
 	});
 });
+
+describe("faults (spec §5.7)", () => {
+	/** An `APIError` as the SDK raises it: an `Error` carrying Filen's own `code`. */
+	function apiError(code: string, message = code): Error & { code: string } {
+		return Object.assign(new Error(message), { code });
+	}
+
+	it.each([
+		["api_key_not_found", "auth"],
+		["invalid_api_key", "auth"],
+		["max_storage_reached", "quota"],
+	])("classifies %s as %s", async (code, kind) => {
+		cloud.getDirectoryTree = () => Promise.reject(apiError(code));
+
+		await expect(remote.listing()).rejects.toMatchObject({ name: "SyncFault", kind });
+	});
+
+	it("classifies a 401 from the HTTP layer as an auth fault", async () => {
+		cloud.getDirectoryTree = () =>
+			Promise.reject(apiError("invalid_http_status_code", "Invalid HTTP status code: 401"));
+
+		await expect(remote.listing()).rejects.toMatchObject({ name: "SyncFault", kind: "auth" });
+	});
+
+	it("leaves an unrecognized failure alone, so the engine reads it as transient", async () => {
+		const network = new Error("socket hang up");
+		cloud.getDirectoryTree = () => Promise.reject(network);
+
+		await expect(remote.listing()).rejects.toBe(network);
+	});
+
+	it("classifies a fault raised by a write, not only by the listing", async () => {
+		await cloud.putDirectory("Folder");
+		await remote.listing(); // the index the upload's parent lookup reads
+		cloud.uploadWebFile = () => Promise.reject(apiError("max_storage_reached"));
+
+		await expect(remote.upload("Folder/Note.md", toBytes("text"))).rejects.toMatchObject({
+			kind: "quota",
+		});
+	});
+
+	it("reports a Remote Folder that no longer resolves as missing-root, not as empty", async () => {
+		const orphan = new FilenRemote({ cloud, rootUuid: "folder-that-was-trashed" });
+
+		// The distinction the engine's `frozen` state rests on: an empty listing would mean
+		// "everything on Filen was deleted", and it would propagate as deletions.
+		await expect(orphan.listing()).rejects.toMatchObject({
+			name: "SyncFault",
+			kind: "missing-root",
+		});
+	});
+
+	it("reports folder_not_found from the listing as missing-root", async () => {
+		cloud.getDirectoryTree = () => Promise.reject(apiError("folder_not_found"));
+
+		await expect(remote.listing()).rejects.toMatchObject({ kind: "missing-root" });
+	});
+});

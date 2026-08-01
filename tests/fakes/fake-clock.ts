@@ -31,6 +31,23 @@ export class FakeClock implements Timers {
 		return this.scheduled.size;
 	}
 
+	/**
+	 * Jumps to the earliest armed timer and fires it; `false` when nothing is armed.
+	 *
+	 * The building block for "let this Run finish" when the Run itself sleeps — a retry
+	 * delay, a backoff rung — because it moves time by exactly what the engine asked for
+	 * and no more, leaving `now()` meaningful to assert against.
+	 */
+	async advanceToNext(): Promise<boolean> {
+		const next = [...this.scheduled.values()].reduce<number | null>(
+			(earliest, timer) => (earliest === null ? timer.at : Math.min(earliest, timer.at)),
+			null,
+		);
+		if (next === null) return false;
+		await this.advance(next - this.current);
+		return true;
+	}
+
 	async advance(ms: number): Promise<void> {
 		const target = this.current + ms;
 		for (;;) {

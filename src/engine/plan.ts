@@ -15,6 +15,7 @@ import {
 } from "./rename";
 import type { SyncScope } from "./scope";
 import type { FileRecord, SyncState } from "./state";
+import type { SkipReason } from "./status";
 import type { RenameHint, RunScope } from "./triggers";
 
 /**
@@ -43,8 +44,6 @@ export type Observation = {
 	local: SideChange;
 	remote: SideChange;
 };
-
-export type SkipReason = "unwritable-path" | "duplicate-remote-path";
 
 export type Operation =
 	| { kind: "mkdir-remote"; path: string }
@@ -96,6 +95,12 @@ export type PlanCounts = {
 	 * this is the *upper bound* on copies, and at First Link (no Ancestors) it is exact.
 	 */
 	conflict: number;
+	/**
+	 * Skip-and-Surfaces this plan already knows about. Counted here for the First-Link
+	 * dry-run preview (spec §8.4, ticket 031), which reports the plan and never the Run; a
+	 * Run reports `RunSummary.skips`, which carries these plus the ones only an attempt
+	 * can discover.
+	 */
 	skipped: number;
 };
 
@@ -234,9 +239,65 @@ async function remoteListing(
 			detail: `a second remote file (${dropped.uuid}) holds this path`,
 		});
 	}
+	skips.push(...resolveCaseCollisions(entries, input.state));
 	// Every path Filen holds, scope or no scope: emptied-folder detection must not read
 	// out-of-scope content as absent and trash the folder around it.
 	return { entries, remotePaths: listing.map((entry) => entry.path), skips };
+}
+
+/**
+ * Two remote paths that differ only in case (spec §5.8).
+ *
+ * The engine compares case-sensitively — a case-sensitive vault holds `Note.md` and
+ * `note.md` side by side quite happily — but every mobile platform and the two desktop
+ * defaults do not, and materializing the second would silently overwrite the first. So
+ * the collision is resolved *here*, by dropping the loser from the diff rather than by
+ * renaming it: renaming would break wikilinks, and inventing a name is never the engine's
+ * call.
+ *
+ * Which one wins: **the one a record already tracks** — it is already synced, and dropping
+ * it would read as "gone from the remote" and propagate a delete. Where none is tracked,
+ * the lexicographically first one, by code unit, so two devices independently reach the
+ * same answer. Both survive on Filen; what is skipped is one side of the pair *here*, and
+ * the skip says which.
+ *
+ * Spec §5.8 says "the known/lexicographically-first path", singular, and one tracked path
+ * is the ordinary case. Two can be tracked, though — a genuinely case-sensitive vault
+ * synced both — and there both are kept: this vault demonstrably holds them, so the
+ * collision is not one, and skipping either would delete a file to solve a problem that
+ * does not exist here.
+ */
+function resolveCaseCollisions(
+	entries: Map<string, RemoteEntry>,
+	state: SyncState,
+): Operation[] {
+	const folded = new Map<string, string[]>();
+	for (const path of entries.keys()) {
+		const fold = path.toLowerCase();
+		const group = folded.get(fold);
+		if (group) group.push(path);
+		else folded.set(fold, [path]);
+	}
+
+	const skips: Operation[] = [];
+	// Sorted, so the report reads the same on two devices whose listings arrived in
+	// different orders.
+	for (const [, group] of [...folded].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+		if (group.length < 2) continue;
+		const tracked = group.filter((path) => state.files.has(path));
+		const kept = tracked.length > 0 ? tracked : [group.reduce((a, b) => (a < b ? a : b))];
+		for (const path of group.sort()) {
+			if (kept.includes(path)) continue;
+			entries.delete(path);
+			skips.push({
+				kind: "skip",
+				path,
+				reason: "case-collision",
+				detail: `${kept.join(", ")} differs from this path only in case, and syncs instead`,
+			});
+		}
+	}
+	return skips;
 }
 
 function scoped(files: { path: string; stat: Stat }[], scope: SyncScope): Map<string, Stat> {
@@ -518,7 +579,7 @@ function download(
 ): Operation {
 	// A name this platform cannot materialize is Skip-and-Surfaced, never
 	// auto-renamed: the engine must not invent content changes or break wikilinks
-	// (spec §5.8). The reporting surface for skips arrives with ticket 036.
+	// (spec §5.8). The reason travels to `RunSummary.skips` for the user to act on.
 	if (!vault.isWritablePath(path)) {
 		return {
 			kind: "skip",

@@ -140,7 +140,12 @@ export class FakeCloud implements FilenCloud {
 			tree[join(parent, file.name)] = { type: "file", ...fileFields(file) };
 		}
 
-		tree["/"] = directoryItem(params.uuid, "root", "base");
+		// The folder asked about keys its own tree — but only if it still exists. A trashed
+		// or stale UUID yields a tree without it, which is what lets the adapter tell "the
+		// Remote Folder is gone" from "the Remote Folder is empty".
+		if (params.uuid === FAKE_ROOT || this.directories.has(params.uuid)) {
+			tree["/"] = directoryItem(params.uuid, "root", "base");
+		}
 		return tree;
 	}
 

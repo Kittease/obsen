@@ -83,19 +83,28 @@ const TABLE_HEAD = `| Original | Conflict copy |
 `;
 
 /**
- * The manifest with `rows` appended — one row per Conflict Copy, exactly once, during
- * the Run that created it. Copy names are unique, so duplicates cannot occur and no
- * dedup pass is needed.
+ * The manifest with `rows` appended — one row per Conflict Copy, exactly once.
+ *
+ * A row already present is not appended again. Copy names are unique per conflict, but a
+ * resolution that wrote its copy and then failed to push it is redone by a later Run
+ * (spec §5.5), and that redo adopts the copy it finds — so the same row can be offered
+ * twice, and the manifest is a list a person reads.
  *
  * Nothing existing is ever removed or reformatted: a missing file is recreated with the
  * header, a file the user gutted keeps whatever they left and gets a fresh table to
  * append to.
  */
 export function appendConflictRows(existing: string | null, rows: readonly ConflictRow[]): string {
-	const table = rows.map((row) => `| ${link(row.original)} | ${link(row.copy)} |\n`).join("");
-	if (existing === null || existing.trim() === "") return `${HEADER}\n${TABLE_HEAD}${table}`;
+	const lines = rows.map((row) => `| ${link(row.original)} | ${link(row.copy)} |\n`);
+	if (existing === null || existing.trim() === "") {
+		return `${HEADER}\n${TABLE_HEAD}${lines.join("")}`;
+	}
 
 	const body = existing.endsWith("\n") ? existing : `${existing}\n`;
+	const table = lines.filter((line) => !body.includes(line)).join("");
+	// Returned unchanged rather than merely equivalent, so the caller can tell there is
+	// nothing to write and leave the user's file — and its mtime — alone.
+	if (table === "") return existing;
 	const last = body.trimEnd().split("\n").at(-1) ?? "";
 	// Rows go at the end, so the only question is whether a table is already there.
 	return last.startsWith("|") ? `${body}${table}` : `${body}\n${TABLE_HEAD}${table}`;

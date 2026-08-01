@@ -472,6 +472,10 @@ describe("five execution phases (spec §5.4–5.5)", () => {
 				store: crashing(world.store, left, ["writeState"]),
 				remoteRoot: REMOTE_ROOT,
 				timers: world.clock,
+				// One attempt per operation: the transient retry ladder is ticket 036's and is
+				// tested there, and a power cut is not a blip a retry rides out — the fake
+				// never comes back, so retrying would only make these cases sleep.
+				constants: { transientAttempts: 1 },
 			});
 			await crashed.syncNow("startup").catch(() => undefined);
 
