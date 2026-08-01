@@ -7,18 +7,24 @@
  * folder, which means a vault backup or another sync tool can read it — so anything
  * added here has to be safe in that light.
  *
- * It is deliberately tiny for now: the link is the only thing 030 needs to know about,
- * because logging out of a *linked* vault is the one logout worth warning about. Ticket
- * 031 fills the link in, 038 adds the Device Name.
+ * It is deliberately tiny: the link is all of it today, and ticket 038 adds the Device
+ * Name.
  */
 
 /**
- * The Remote Folder this vault is linked to. The UUID is what a link *is* — it survives
- * the folder being moved or renamed (spec §8.3) — and it is all this slice needs, to
- * answer "is a folder linked?" when logging out. Ticket 031 owns the link itself and
- * whatever else it needs to remember about the folder.
+ * The Remote Folder this vault is linked to.
+ *
+ * The UUID is what a link *is* — it survives the folder being moved or renamed on Filen
+ * (spec §8.3). The path is **display-only**, remembered so settings can say where the
+ * folder was without a round trip, and stale by design: a folder renamed on Filen still
+ * shows its old path here until the next time it is browsed, and nothing about sync
+ * depends on it.
  */
-export type VaultLink = { folderUuid: string };
+export type VaultLink = {
+	folderUuid: string;
+	/** Slash-separated, relative to the Filen root; `""` *is* the root (spec §8.3). */
+	path: string;
+};
 
 export type ObsenData = {
 	link: VaultLink | null;
@@ -42,7 +48,9 @@ export function readObsenData(raw: unknown): ObsenData {
 
 function readLink(raw: unknown): VaultLink | null {
 	if (typeof raw !== "object" || raw === null) return null;
-	const { folderUuid } = raw as { folderUuid?: unknown };
+	const { folderUuid, path } = raw as { folderUuid?: unknown; path?: unknown };
 	if (typeof folderUuid !== "string" || folderUuid === "") return null;
-	return { folderUuid };
+	// A missing path is not a broken link — the UUID is the link, and the display falls
+	// back to "the Filen root", which an empty path legitimately means anyway.
+	return { folderUuid, path: typeof path === "string" ? path : "" };
 }

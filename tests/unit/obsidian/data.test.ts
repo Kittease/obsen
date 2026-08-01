@@ -10,8 +10,14 @@ import { DEFAULT_DATA, readObsenData } from "../../../src/obsidian/data.ts";
 
 describe("readObsenData", () => {
 	it("reads a stored link", () => {
+		expect(readObsenData({ link: { folderUuid: "folder-uuid", path: "Notes/Vault" } })).toEqual({
+			link: { folderUuid: "folder-uuid", path: "Notes/Vault" },
+		});
+	});
+
+	it("reads a link with no path as one at the Filen root — the UUID is the link", () => {
 		expect(readObsenData({ link: { folderUuid: "folder-uuid" } })).toEqual({
-			link: { folderUuid: "folder-uuid" },
+			link: { folderUuid: "folder-uuid", path: "" },
 		});
 	});
 
@@ -31,7 +37,7 @@ describe("readObsenData", () => {
 	it("keeps nothing it was not asked to keep", () => {
 		// Everything credential-shaped belongs in SecretStorage (spec §8.1), and a field
 		// this file does not know about is one nothing here can promise anything about.
-		const data = readObsenData({ link: { folderUuid: "u" }, apiKey: "leaked", extra: 1 });
+		const data = readObsenData({ link: { folderUuid: "u", path: "" }, apiKey: "leaked", extra: 1 });
 
 		expect(Object.keys(data)).toEqual(["link"]);
 		expect(JSON.stringify(data)).not.toContain("leaked");
@@ -39,7 +45,7 @@ describe("readObsenData", () => {
 
 	it("hands back a fresh object, so the defaults cannot be mutated in place", () => {
 		const data = readObsenData(null);
-		data.link = { folderUuid: "u" };
+		data.link = { folderUuid: "u", path: "" };
 
 		expect(DEFAULT_DATA.link).toBe(null);
 	});

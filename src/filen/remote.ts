@@ -12,6 +12,7 @@ import { sha512Hex } from "../engine/hash";
 import { baseName, parentPath, toNfc } from "../engine/paths";
 import type { RemoteEntry, RemoteEvent, RemotePort } from "../engine/ports";
 import { type IndexedFile, metadataOf, SessionIndex } from "./session-index";
+import { hasUndecryptableSegment } from "./undecryptable";
 
 /**
  * The production {@link RemotePort} (spec §1.2, §7): `@filen/sdk` on one side, the
@@ -65,20 +66,6 @@ export function createFilenRemote(sdk: FilenSDK, rootUuid: string): FilenRemote 
 	return new FilenRemote({ cloud: sdk.cloud(), rootUuid });
 }
 
-/**
- * A name the SDK could not decrypt. It substitutes this placeholder rather than
- * failing, and the substitute must never reach the vault: the file's key is part of
- * the same unreadable metadata, so the bytes behind it cannot be fetched either, and
- * materializing the name would create a note whose every download fails.
- *
- * Hiding it does **not** hide a file that would otherwise sync. A file whose
- * metadata will not decrypt has already lost its real path — the tree keys it under
- * this placeholder, not under the name Obsen knows — so the Run sees the real path
- * as missing either way. That is Filen-side corruption, and no adapter can reconcile
- * it; what this filter buys is that the corruption does not also spawn a junk note.
- */
-const UNDECRYPTABLE = "CANNOT_DECRYPT_NAME_";
-
 const SHA512_HEX = /^[0-9a-f]{128}$/;
 
 export class FilenRemote implements RemotePort {
@@ -129,7 +116,7 @@ export class FilenRemote implements RemotePort {
 			const path = vaultRelative(key);
 			// The Remote Folder itself, which the index already holds as the root.
 			if (path === "") continue;
-			if (isUndecryptable(path)) continue;
+			if (hasUndecryptableSegment(path)) continue;
 			if (item.type === "directory") {
 				this.index.addFolder(path, item.uuid);
 				continue;
@@ -366,10 +353,6 @@ function missingRoot(rootUuid: string, cause: unknown): SyncFault {
  */
 function vaultRelative(key: string): string {
 	return toNfc(key.startsWith("/") ? key.slice(1) : key);
-}
-
-function isUndecryptable(path: string): boolean {
-	return path.split("/").some((segment) => segment.startsWith(UNDECRYPTABLE));
 }
 
 /**

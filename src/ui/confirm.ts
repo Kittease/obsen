@@ -1,11 +1,13 @@
-import { type App, Modal, Setting } from "obsidian";
+import { type App, Setting } from "obsidian";
+
+import { AnsweringModal, ask } from "./answering-modal";
 
 /**
  * The one-question modal: *"here is what this will do — still want to?"*.
  *
- * Obsen asks it before the handful of actions a user cannot simply undo (logging out
- * of a linked vault here; unlinking and First Link in ticket 031), so the wording of
- * the consequence is the caller's and everything else is shared.
+ * Obsen asks it before the handful of actions a user cannot simply undo — logging out
+ * of a linked vault, unlinking, choosing the Filen root, starting a First Link — so the
+ * wording of the consequence is the caller's and everything else is shared.
  *
  * Resolves `true` for the confirm button and `false` for anything else — Cancel,
  * Escape, or clicking outside — because every other way of closing a modal means the
@@ -22,21 +24,20 @@ export type ConfirmOptions = {
 };
 
 export function confirm(app: App, options: ConfirmOptions): Promise<boolean> {
-	return new Promise((resolve) => {
-		const modal = new ConfirmModal(app, options, resolve);
-		modal.open();
-	});
+	return ask((resolve) => new ConfirmModal(app, options, resolve));
 }
 
-class ConfirmModal extends Modal {
-	private decided = false;
-
+class ConfirmModal extends AnsweringModal<boolean> {
 	constructor(
 		app: App,
 		private readonly options: ConfirmOptions,
-		private readonly resolve: (confirmed: boolean) => void,
+		resolve: (confirmed: boolean) => void,
 	) {
-		super(app);
+		super(app, resolve);
+	}
+
+	protected override get fallback(): boolean {
+		return false;
 	}
 
 	override onOpen(): void {
@@ -53,7 +54,7 @@ class ConfirmModal extends Modal {
 			)
 			.addButton((button) => {
 				button.setButtonText(this.options.cta).onClick(() => {
-					this.decide(true);
+					this.answer(true);
 					this.close();
 				});
 				// Styled by class rather than by `setWarning()`, which is deprecated, and by
@@ -65,18 +66,5 @@ class ConfirmModal extends Modal {
 					button.setCta().buttonEl.addClasses(["mod-warning", "mod-destructive"]);
 				} else button.setCta();
 			});
-	}
-
-	override onClose(): void {
-		this.contentEl.empty();
-		// Escape, the close button and a click outside all land here without having
-		// decided anything, and all three mean "no".
-		this.decide(false);
-	}
-
-	private decide(confirmed: boolean): void {
-		if (this.decided) return;
-		this.decided = true;
-		this.resolve(confirmed);
 	}
 }

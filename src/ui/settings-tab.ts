@@ -1,33 +1,41 @@
 import { type App, Notice, type Plugin, PluginSettingTab, Setting } from "obsidian";
 
+import type { FolderTree } from "../filen/folders";
+import type { Link } from "../link";
 import type { Session } from "../session";
 import { confirm } from "./confirm";
+import { DUAL_ENGINE_CAUTION, runFirstLink } from "./first-link";
+import { folderLabel, pickRemoteFolder } from "./folder-picker";
 import { type LoginFeedback, loginFeedback } from "./login-feedback";
 
 /**
  * The settings tab (spec §8.2): the whole onboarding surface, as a state machine.
  * Logged out → logged in, unlinked → linked; no wizard, and modals only where a
- * decision needs one.
+ * decision needs one — the folder browser and the First Link gate.
  *
- * This slice implements the first transition. The linked half — folder picker, First
- * Link, status and activity — is tickets 031, 037 and 038, and lands under the same
- * `display()` switch.
+ * The status, activity and troubleshooting sections of the linked state are tickets 037
+ * and 038, and land under the same `display()` switch.
  *
- * The tab keeps **no session state of its own**: it renders {@link Session}'s and
- * re-renders when that changes. What it does own is the login *draft* — the three
- * fields as typed, held across a re-render so that "2FA required" can reveal the code
- * field without emptying the form (spec §8.2's no-dead-end rule) — and it drops the
- * draft the moment the tab closes, because a password has no business outliving the
- * form it was typed into.
+ * The tab keeps **no state of its own** about either transition: it renders
+ * {@link Session}'s and {@link Link}'s, and re-renders when either changes. What it does
+ * own is the login *draft* — the three fields as typed, held across a re-render so that
+ * "2FA required" can reveal the code field without emptying the form (spec §8.2's
+ * no-dead-end rule) — and it drops the draft the moment the tab closes, because a
+ * password has no business outliving the form it was typed into.
  */
 
 type LoginDraft = { email: string; password: string; twoFactor: boolean; code: string };
 
-/** What the tab needs of the plugin around it, so ticket 031 can grow `isLinked`. */
+/** What the tab needs of the plugin around it. */
 export type SettingsHost = {
 	session: Session;
-	/** Whether a Remote Folder is linked — what makes logging out worth a warning. */
-	isLinked(): boolean;
+	/** The link: whether one exists, and the three transitions the tab can cause. */
+	link: Link;
+	/**
+	 * The Filen tree the folder picker browses. A function rather than a value because it
+	 * only exists while someone is logged in — which is also the only state that offers it.
+	 */
+	folders(): FolderTree;
 };
 
 export class ObsenSettingTab extends PluginSettingTab {
@@ -38,7 +46,8 @@ export class ObsenSettingTab extends PluginSettingTab {
 	private error: string | null = null;
 	/** Whether Obsidian currently has this tab open — `display()` on, `hide()` off. */
 	private displayed = false;
-	private unsubscribe: (() => void) | null = null;
+	/** One per source the tab renders; dropped when Obsidian closes the tab. */
+	private subscriptions: (() => void)[] = [];
 	/** The live password field, so the eye toggle can flip it without a re-render. */
 	private passwordEl: HTMLInputElement | null = null;
 
@@ -51,10 +60,13 @@ export class ObsenSettingTab extends PluginSettingTab {
 		this.displayed = true;
 		// Obsidian calls `display()` again every time the tab is re-opened, and `hide()`
 		// in between; subscribing here and dropping it there keeps exactly one listener
-		// alive for exactly as long as something is drawn.
-		this.unsubscribe ??= this.host.session.subscribe(() => {
-			this.render();
-		});
+		// per source alive for exactly as long as something is drawn.
+		if (this.subscriptions.length === 0) {
+			const redraw = (): void => {
+				this.render();
+			};
+			this.subscriptions = [this.host.session.subscribe(redraw), this.host.link.subscribe(redraw)];
+		}
 		this.render();
 	}
 
@@ -65,8 +77,8 @@ export class ObsenSettingTab extends PluginSettingTab {
 
 	override hide(): void {
 		this.displayed = false;
-		this.unsubscribe?.();
-		this.unsubscribe = null;
+		for (const drop of this.subscriptions) drop();
+		this.subscriptions = [];
 		// The password is gone as soon as the form is: nothing the user types is kept
 		// anywhere, in storage or in memory (spec §8.1).
 		this.draft = emptyDraft();
@@ -79,8 +91,13 @@ export class ObsenSettingTab extends PluginSettingTab {
 		this.containerEl.empty();
 		this.passwordEl = null;
 		const state = this.host.session.state;
-		if (state.status === "logged-in") this.renderAccount(state.email);
-		else this.renderLogin();
+		if (state.status !== "logged-in") {
+			this.renderLogin();
+			return;
+		}
+		this.renderAccount(state.email);
+		if (this.host.link.linked) this.renderLinked();
+		else this.renderUnlinked();
 	}
 
 	// ---- logged out ----
@@ -257,10 +274,94 @@ export class ObsenSettingTab extends PluginSettingTab {
 			);
 	}
 
+	// ---- unlinked ----
+
+	private renderUnlinked(): void {
+		const container = this.containerEl;
+		new Setting(container).setName("Remote folder").setHeading();
+		container.createEl("p", {
+			cls: "setting-item-description",
+			text:
+				"Pick the Filen folder this vault syncs with. Obsen shows you what the first sync " +
+				"would do before anything moves.",
+		});
+
+		new Setting(container)
+			.setName("Not linked yet")
+			.setDesc("Nothing syncs until a folder is chosen.")
+			.addButton((button) =>
+				button
+					.setButtonText("Choose folder…")
+					.setCta()
+					.onClick(() => {
+						void this.chooseFolder();
+					}),
+			);
+	}
+
+	/** The picker, then the First Link flow — spec §8.3 into §8.4. */
+	private async chooseFolder(): Promise<void> {
+		let tree;
+		try {
+			tree = this.host.folders();
+		} catch (error) {
+			console.error("Obsen: no Filen client to browse with", error);
+			new Notice("Obsen: log in to Filen again before choosing a folder.");
+			return;
+		}
+
+		const picked = await pickRemoteFolder(this.app, tree);
+		if (picked === null) return;
+		await runFirstLink(this.app, this.host.link, picked);
+		// A commit redraws through the subscription; a Cancel changes nothing and does not.
+	}
+
+	// ---- linked ----
+
+	private renderLinked(): void {
+		const container = this.containerEl;
+		const folder = this.host.link.folder;
+		new Setting(container).setName("Remote folder").setHeading();
+
+		new Setting(container)
+			.setName(`Syncing with ${folderLabel(folder?.path ?? "")}`)
+			.setDesc(
+				"Renaming or moving this folder on Filen is safe — the link follows the folder, " +
+					"not its path.",
+			)
+			.addButton((button) =>
+				button.setButtonText("Unlink…").onClick(() => {
+					void this.unlink();
+				}),
+			);
+
+		// The second of the two placements spec §8.4 requires: permanent, because the
+		// mistake it warns about can be made long after linking day.
+		container.createDiv({ cls: "obsen-callout", text: DUAL_ENGINE_CAUTION });
+	}
+
+	private async unlink(): Promise<void> {
+		const confirmed = await confirm(this.app, {
+			title: "Unlink this vault?",
+			body: [
+				"Sync stops. Nothing is deleted — every file stays exactly where it is, in this " +
+					"vault and on Filen.",
+				"Obsen forgets what it had already synced, so linking this vault again scans both " +
+					"sides from scratch, the way the first link did.",
+			],
+			cta: "Unlink",
+			destructive: true,
+		});
+		if (!confirmed) return;
+
+		await this.host.link.unlink();
+		new Notice("Obsen: unlinked. No files were changed.");
+	}
+
 	private async logOut(): Promise<void> {
 		// Only worth a modal when it stops something: with no folder linked, logging out
 		// is as reversible as logging in (spec §8.2).
-		if (this.host.isLinked()) {
+		if (this.host.link.linked) {
 			const confirmed = await confirm(this.app, {
 				title: "Log out of Filen?",
 				body: [

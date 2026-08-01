@@ -18,6 +18,7 @@ export { sha512Hex, type Hasher } from "./hash";
 export { ancestorPaths, fileExtension, isMergeable, parentPath, pathDepth, toNfc } from "./paths";
 export {
 	computePlan,
+	PlanCancelledError,
 	RemoteUnavailableError,
 	type Observation,
 	type Operation,

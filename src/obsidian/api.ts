@@ -34,6 +34,7 @@ export interface AdapterApi {
 	readBinary(path: string): Promise<ArrayBuffer>;
 	writeBinary(path: string, data: ArrayBuffer): Promise<void>;
 	mkdir(path: string): Promise<void>;
+	rmdir(path: string, recursive: boolean): Promise<void>;
 	rename(path: string, newPath: string): Promise<void>;
 	remove(path: string): Promise<void>;
 	trashLocal(path: string): Promise<void>;

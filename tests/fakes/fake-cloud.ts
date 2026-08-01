@@ -2,6 +2,7 @@ import type { CloudItem, CloudItemTree, FileMetadata, FolderMetadata } from "@fi
 
 import { sha512Hex } from "../../src/engine/hash.ts";
 import { baseName, parentPath } from "../../src/engine/paths.ts";
+import type { FilenDirectories } from "../../src/filen/folders.ts";
 import type { FilenCloud } from "../../src/filen/remote.ts";
 import { toBytes } from "./content.ts";
 
@@ -49,12 +50,12 @@ export const FAKE_ROOT = "root-uuid";
 /** Fixed, so nothing in a test depends on when it ran. */
 const SEEDED_AT = 1_700_000_000_000;
 
-export class FakeCloud implements FilenCloud {
+export class FakeCloud implements FilenCloud, FilenDirectories {
 	private readonly directories = new Map<string, FakeDirectory>();
 	private readonly files = new Map<string, FakeFile>();
 	private ids = 0;
 
-	readonly calls = { listing: 0, download: 0, upload: 0, createDirectory: 0 };
+	readonly calls = { listing: 0, listDirectory: 0, download: 0, upload: 0, createDirectory: 0 };
 	readonly trashedFiles: string[] = [];
 	readonly trashedDirectories: string[] = [];
 
@@ -147,6 +148,30 @@ export class FakeCloud implements FilenCloud {
 			tree["/"] = directoryItem(params.uuid, "root", "base");
 		}
 		return tree;
+	}
+
+	/**
+	 * One level of the tree, the way the folder picker reads it. `onlyDirectories` is
+	 * honoured rather than ignored: the picker relies on it, and a fake that returned
+	 * files anyway would hide a caller that forgot to filter.
+	 */
+	async listDirectory(params: { uuid: string; onlyDirectories?: boolean }): Promise<CloudItem[]> {
+		this.calls.listDirectory += 1;
+		this.expectParent(params.uuid);
+		const items: CloudItem[] = [...this.directories.values()]
+			.filter((directory) => directory.parent === params.uuid)
+			.map((directory) => ({
+				...directoryItem(directory.uuid, directory.name, directory.parent),
+				type: "directory" as const,
+				color: null,
+			}));
+		if (params.onlyDirectories === true) return items;
+		return [
+			...items,
+			...[...this.files.values()]
+				.filter((file) => file.parent === params.uuid)
+				.map((file): CloudItem => ({ type: "file", ...fileFields(file), rm: `rm-${file.uuid}` })),
+		];
 	}
 
 	downloadFileToReadableStream(params: {

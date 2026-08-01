@@ -90,6 +90,17 @@ export default defineConfig([
 	},
 
 	{
+		// The sentence-case rule knows Obsidian's own brand names and cannot know these
+		// two, so it reads "Filen" mid-sentence as a capitalization mistake. `ignoreWords`
+		// rather than `brands`, because the `brands` option *replaces* the plugin's list
+		// instead of extending it, and copying that list here would freeze it.
+		files: ["src/**/*.ts"],
+		rules: {
+			"obsidianmd/ui/sentence-case": ["warn", { ignoreWords: ["Filen", "Obsen"] }],
+		},
+	},
+
+	{
 		// Obsidian 1.13's declarative settings API (`getSettingDefinitions`) describes a
 		// *list of settings*, and Obsen's tab is not one: it is a state machine (spec
 		// §8.2) whose controls — login form, folder picker, recovery actions — mostly do

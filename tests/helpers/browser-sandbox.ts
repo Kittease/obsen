@@ -38,6 +38,9 @@ function createObsidianStub(): Record<string, unknown> {
 		loadData(): Promise<unknown> {
 			return Promise.resolve(null);
 		}
+		/** `Component`'s unload hook: what `onload` hands its subscriptions to. */
+		register(): void {}
+		registerEvent(): void {}
 	}
 	// Only the base classes the bundle *extends* need to be real: a subclass declaration
 	// is evaluated at load time, which is what this gate runs. Everything the UI merely

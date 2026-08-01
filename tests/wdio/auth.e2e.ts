@@ -291,9 +291,9 @@ describe("the settings tab in real Obsidian", () => {
 			async ({ app, plugins }, id, auth) => {
 				app.secretStorage.setSecret(id, auth);
 				plugins.obsen.session!.restore();
-				// What ticket 031 will write when a folder is picked; here it is only what
-				// makes logging out worth a warning (spec §8.2).
-				plugins.obsen.settings.link = { folderUuid: "linked-folder-uuid" };
+				// What the folder picker writes; here it is only what makes logging out worth
+				// a warning (spec §8.2).
+				plugins.obsen.settings.link = { folderUuid: "linked-folder-uuid", path: "Notes" };
 
 				const tab = plugins.obsen.settingsTab!;
 				tab.display();
@@ -333,7 +333,7 @@ describe("the settings tab in real Obsidian", () => {
 			async ({ app, plugins }, id, auth) => {
 				app.secretStorage.setSecret(id, auth);
 				plugins.obsen.session!.restore();
-				plugins.obsen.settings.link = { folderUuid: "linked-folder-uuid" };
+				plugins.obsen.settings.link = { folderUuid: "linked-folder-uuid", path: "Notes" };
 
 				const tab = plugins.obsen.settingsTab!;
 				tab.display();
@@ -361,7 +361,7 @@ describe("the settings tab in real Obsidian", () => {
 
 		expect(outcome.state).toBe("logged-out");
 		expect(outcome.secret).toBe(null);
-		expect(outcome.link).toEqual({ folderUuid: "linked-folder-uuid" });
+		expect(outcome.link).toEqual({ folderUuid: "linked-folder-uuid", path: "Notes" });
 		// And the tab followed the session back to the login form.
 		expect(outcome.text).toContain("Email");
 	});

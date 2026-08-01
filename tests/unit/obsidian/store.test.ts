@@ -96,3 +96,45 @@ describe("Shadow Store", () => {
 		await expect(store.readShadow("nested/hash")).rejects.toThrow(/not a content hash/);
 	});
 });
+
+describe("reset — what Unlink drops (spec §8.3)", () => {
+	it("removes the Sync State and the whole Shadow Store", async () => {
+		await store.writeState('{"schemaVersion":1,"files":{}}');
+		await store.writeShadow(HASH, new Uint8Array([1]));
+		await store.writeShadow("b".repeat(128), new Uint8Array([2]));
+
+		await store.reset();
+
+		expect(await store.readState()).toBeNull();
+		expect(await store.readShadow(HASH)).toBeNull();
+		expect(obsidian.allPaths()).toEqual([]);
+		expect(obsidian.hasFolder(".obsidian/plugins/obsen/shadow")).toBe(false);
+	});
+
+	it("leaves the plugin's own settings alone — Unlink is not uninstalling", async () => {
+		obsidian.seed(".obsidian/plugins/obsen/data.json", '{"link":null}');
+		await store.writeState("{}");
+
+		await store.reset();
+
+		expect(obsidian.allPaths()).toEqual([".obsidian/plugins/obsen/data.json"]);
+	});
+
+	it("is a no-op on a vault Obsen never wrote to, and can be repeated", async () => {
+		await store.reset();
+		await store.reset();
+
+		expect(await store.readState()).toBeNull();
+	});
+
+	it("leaves a usable store behind — a re-link writes a fresh state and shadow", async () => {
+		await store.writeShadow(HASH, new Uint8Array([1]));
+		await store.reset();
+
+		await store.writeState("{}");
+		await store.writeShadow(HASH, new Uint8Array([2]));
+
+		expect(await store.readState()).toBe("{}");
+		expect(await store.readShadow(HASH)).toEqual(new Uint8Array([2]));
+	});
+});

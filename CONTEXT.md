@@ -6,7 +6,9 @@ Glossary of the Obsen domain. Terms are canonical: code, tickets, and specs use 
 
 - **Vault** — the local Obsidian vault: the folder tree Obsidian manages on a device, accessed only through Obsidian's vault adapter.
 - **Remote Folder** — the single Filen directory a vault is linked to. The remote side of the sync.
-- **Link / First Link** — the act of connecting a vault to a Remote Folder for the first time, before any Sync State exists. First-link rules are conservative: nothing is overwritten or deleted.
+- **Link / First Link** — the act of connecting a vault to a Remote Folder for the first time, before any Sync State exists. First-link rules are conservative: nothing is overwritten or deleted. A link *is* the Remote Folder's UUID; the path is remembered for display only, so renaming or moving the folder on Filen does not break it.
+- **Dry Run** — the plan-only pass the First Link preview is built from: the planner runs, nothing executes, and cancelling it costs nothing because no plan has been acted on.
+- **Unlink** — undoing a link: the link, the Sync State and the Shadow Store are dropped, and no file is touched on either side. All three are recreatable, so re-linking the same folder is a Re-Bootstrap.
 - **Sync** — making vault and Remote Folder converge on the same content, in both directions.
 - **Reconcile** — a full comparison of vault, Remote Folder, and Sync State producing the operations needed to converge. The correctness backstop; runs at startup and foreground-resume. Event-driven syncs are optimizations layered on top.
 - **Foreground-Resume** — the moment the Obsidian app returns to the foreground after OS suspension (mobile) or refocus (desktop). Triggers a Reconcile because events during suspension are lost.

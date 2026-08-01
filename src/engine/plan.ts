@@ -134,6 +134,15 @@ export type PlanInput = {
 	/** Rename Hints from this Run's Dirty Set, consumed by tier 2 of the pairing pass. */
 	hints?: readonly RenameHint[];
 	onProgress?: (progress: PlanProgress) => void;
+	/**
+	 * Asked at every point the planner is about to spend I/O; a `true` abandons the plan
+	 * with a {@link PlanCancelledError}. This is the free Cancel of the First-Link scan
+	 * (spec §8.4 step 2), and it is free precisely because planning writes nothing: an
+	 * abandoned plan leaves both sides exactly as it found them.
+	 *
+	 * Ordinary Runs pass nothing — a Run the user cannot see has no Cancel to offer.
+	 */
+	cancelled?: () => boolean;
 };
 
 /** Thrown when the remote listing fails: the Run is `offline`, not broken. */
@@ -142,6 +151,19 @@ export class RemoteUnavailableError extends Error {
 		super(`Obsen: the Filen listing failed — ${errorMessage(cause)}`);
 		this.name = "RemoteUnavailableError";
 	}
+}
+
+/** Thrown out of {@link computePlan} when {@link PlanInput.cancelled} says to stop. */
+export class PlanCancelledError extends Error {
+	constructor() {
+		super("Obsen: the dry run was cancelled");
+		this.name = "PlanCancelledError";
+	}
+}
+
+/** @throws {PlanCancelledError} */
+function checkpoint(cancelled: (() => boolean) | undefined): void {
+	if (cancelled?.() === true) throw new PlanCancelledError();
 }
 
 /** Narrows {@link Operation} to one of its kinds; shared with the executor. */
@@ -162,11 +184,13 @@ type Draft = {
 };
 
 export async function computePlan(input: PlanInput): Promise<Plan> {
-	const { vault, state, scope, run, constants, onProgress } = input;
+	const { vault, state, scope, run, constants, onProgress, cancelled } = input;
 
+	checkpoint(cancelled);
 	onProgress?.({ phase: "listing" });
 	const { entries, remotePaths, skips } = await remoteListing(input);
 
+	checkpoint(cancelled);
 	onProgress?.({ phase: "scanning" });
 	// FULL Runs scan the vault once; scoped Runs stat only their paths. Scope
 	// constrains the local side only — the remote listing is always complete, which
@@ -396,6 +420,9 @@ async function observe(
 	if (needsHash.length > 0) onProgress?.({ phase: "hashing", done: 0, total: needsHash.length });
 	let hashed = 0;
 	for (const draft of needsHash) {
+		// Asked between files rather than during one: hashing a vault is the long half of a
+		// dry run, and one file's read is short enough that finishing it costs nothing.
+		checkpoint(input.cancelled);
 		// Sequential: reads are whole-file and the progress count must be honest.
 		hashes.set(draft.path, await hash(await vault.read(draft.readPath)));
 		hashed += 1;

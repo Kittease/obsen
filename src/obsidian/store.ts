@@ -74,6 +74,29 @@ export class ObsidianStore implements StorePort {
 	}
 
 	/**
+	 * Drops everything Obsen persists for this vault — Unlink (spec §8.3).
+	 *
+	 * Both halves are recreatable: the Sync State by a Re-Bootstrap, the Shadow Store by
+	 * the Runs that follow it. Which is why Unlink can afford to be this blunt, and why
+	 * it stops here: `data.json` is settings, not sync state, and the vault's own files
+	 * are never touched on either side.
+	 *
+	 * Idempotent, because it also runs on a vault that was never linked — and because a
+	 * user who unlinks twice should not see an error the first one already handled.
+	 */
+	async reset(): Promise<void> {
+		for (const file of [this.layout.stateFile, this.layout.stateTmpFile]) {
+			if (await this.adapter.exists(file)) await this.adapter.remove(file);
+		}
+		if (await this.adapter.exists(this.layout.shadowDir)) {
+			await this.adapter.rmdir(this.layout.shadowDir, true);
+		}
+		// The folder this promise stood for is gone, so the next `writeShadow` has to
+		// create it again rather than trust a resolved promise from a previous life.
+		this.shadowFolderReady = null;
+	}
+
+	/**
 	 * Content-addressed, one flat folder. The hash is a SHA-512 hex digest the engine
 	 * produced, so it is 128 characters of `[0-9a-f]` and needs no escaping — but that is
 	 * checked rather than assumed, because a name that reached here with a `/` in it

@@ -1,0 +1,107 @@
+/*
+ * Obsen's stylesheet. Obsidian loads it from the plugin folder automatically, so it
+ * ships alongside `main.js` and `manifest.json` in every release.
+ *
+ * Deliberately tiny, and every value is one of Obsidian's own CSS variables: a plugin
+ * that hardcodes colours looks wrong in half the themes people actually use, and looks
+ * wrong on the other platform in the other colour scheme. What is styled here is only
+ * what Obsidian has no component for — the folder picker's scrolling list of rows, and
+ * the callouts the linked state shows.
+ */
+
+/* ---- folder picker (spec §8.3) ---- */
+
+.obsen-picker-trail {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--size-2-1);
+	margin-bottom: var(--size-4-2);
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.obsen-picker-crumb {
+	/* A breadcrumb is a link, not a button, whatever element it is made of. */
+	background: none;
+	box-shadow: none;
+	padding: 0 var(--size-2-1);
+	color: var(--text-accent);
+	font-size: var(--font-ui-small);
+}
+
+button.obsen-picker-crumb:hover {
+	background: none;
+	text-decoration: underline;
+}
+
+.obsen-picker-separator {
+	color: var(--text-faint);
+}
+
+.obsen-picker-list {
+	/* Bounded rather than tall: a drive with two hundred folders must not push the
+	   modal's buttons off a phone screen. */
+	max-height: 45vh;
+	overflow-y: auto;
+	border: var(--border-width) solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+}
+
+.obsen-picker-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	/* Tall enough to be a comfortable tap target on a phone. */
+	padding: var(--size-4-2) var(--size-4-3);
+	cursor: var(--cursor);
+	border-bottom: var(--border-width) solid var(--background-modifier-border);
+}
+
+.obsen-picker-row:last-child {
+	border-bottom: none;
+}
+
+.obsen-picker-row:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.obsen-picker-row.is-selected {
+	background-color: var(--background-modifier-active-hover);
+	font-weight: var(--font-semibold);
+}
+
+.obsen-picker-name {
+	overflow-wrap: anywhere;
+}
+
+.obsen-picker-note {
+	padding: var(--size-4-2) var(--size-4-3);
+	color: var(--text-muted);
+}
+
+/* ---- First Link preview and the linked state ---- */
+
+.obsen-preview-counts,
+.obsen-preview-conflicts {
+	margin: var(--size-4-2) 0;
+	padding-left: var(--size-4-5);
+}
+
+.obsen-preview-conflicts {
+	max-height: 30vh;
+	overflow-y: auto;
+	color: var(--text-muted);
+	overflow-wrap: anywhere;
+}
+
+.obsen-callout {
+	margin: var(--size-4-3) 0;
+	padding: var(--size-4-2) var(--size-4-3);
+	border-left: var(--size-2-1) solid var(--text-accent);
+	border-radius: var(--radius-s);
+	background-color: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}

@@ -137,6 +137,8 @@ export class SyncEngine {
 			scope?: RunScope;
 			hints?: readonly RenameHint[];
 			onProgress?: (progress: PlanProgress) => void;
+			/** Asked before every I/O step; `true` abandons the dry run (spec §8.4 step 2). */
+			cancelled?: () => boolean;
 		} = {},
 	): Promise<Plan> {
 		return computePlan({
@@ -149,6 +151,7 @@ export class SyncEngine {
 			constants: this.constants,
 			...(options.hints ? { hints: options.hints } : {}),
 			...(options.onProgress ? { onProgress: options.onProgress } : {}),
+			...(options.cancelled ? { cancelled: options.cancelled } : {}),
 		});
 	}
 

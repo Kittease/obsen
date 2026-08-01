@@ -191,6 +191,24 @@ export class FakeObsidian {
 				}
 				return Promise.resolve();
 			},
+			rmdir: (path, recursive) => {
+				if (!this.folders.has(path)) return Promise.reject(new Error(`no such folder ${path}`));
+				const prefix = `${path}/`;
+				const inside = (paths: Iterable<string>): string[] =>
+					[...paths].filter((p) => p.startsWith(prefix));
+				if (!recursive && (inside(this.files.keys()).length > 0 || inside(this.folders).length > 0)) {
+					return Promise.reject(new Error(`folder not empty ${path}`));
+				}
+				for (const file of inside(this.files.keys())) {
+					this.files.delete(file);
+					this.acknowledge("delete", file);
+				}
+				for (const folder of [...inside(this.folders), path]) {
+					this.folders.delete(folder);
+					this.indexed.delete(folder);
+				}
+				return Promise.resolve();
+			},
 			rename: (path, newPath) => {
 				const entry = this.files.get(path);
 				if (entry === undefined) return Promise.reject(new Error(`no such file ${path}`));

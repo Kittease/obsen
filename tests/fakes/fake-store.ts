@@ -44,4 +44,11 @@ export class FakeStore implements StorePort {
 		this.shadow.delete(hash);
 		return Promise.resolve();
 	}
+
+	/** What Unlink drops (spec §8.3) — both halves at once, and repeatable. */
+	reset(): Promise<void> {
+		this.state = null;
+		this.shadow.clear();
+		return Promise.resolve();
+	}
 }
