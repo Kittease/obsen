@@ -1,5 +1,5 @@
 import { engineConstants, type EngineConstants } from "./constants";
-import { executePlan } from "./execute";
+import { executePlan, type ExecutionReport } from "./execute";
 import { sha512Hex, type Hasher } from "./hash";
 import { errorMessage } from "./errors";
 import { computePlan, RemoteUnavailableError, type Plan, type PlanProgress } from "./plan";
@@ -103,7 +103,13 @@ export class SyncEngine {
 	 * The plan-only entry point (spec §8.4): the planner runs, nothing executes.
 	 * Feeds the First Link dry-run preview, and is the same code a real Run plans with.
 	 */
-	plan(options: { scope?: RunScope; onProgress?: (progress: PlanProgress) => void } = {}): Promise<Plan> {
+	plan(
+		options: {
+			scope?: RunScope;
+			hints?: readonly RenameHint[];
+			onProgress?: (progress: PlanProgress) => void;
+		} = {},
+	): Promise<Plan> {
 		return computePlan({
 			vault: this.options.vault,
 			remote: this.options.remote,
@@ -112,6 +118,7 @@ export class SyncEngine {
 			run: options.scope ?? FULL_SCOPE,
 			hash: this.hash,
 			constants: this.constants,
+			...(options.hints ? { hints: options.hints } : {}),
 			...(options.onProgress ? { onProgress: options.onProgress } : {}),
 		});
 	}
@@ -185,8 +192,10 @@ export class SyncEngine {
 			uploaded: 0,
 			downloaded: 0,
 			identical: 0,
+			moved: 0,
+			deleted: 0,
 			conflicts: 0,
-			deferred: 0,
+			requeued: 0,
 			skipped: 0,
 			failures: [],
 			error: null,
@@ -195,7 +204,7 @@ export class SyncEngine {
 
 		let plan: Plan;
 		try {
-			plan = approved ?? (await this.plan({ scope: dirty.scope }));
+			plan = approved ?? (await this.plan({ scope: dirty.scope, hints: dirty.hints }));
 		} catch (error) {
 			// A failed listing is `offline`; the backoff ladder and the rest of the error
 			// taxonomy are ticket 036's. Anything else is a local fault, and reporting it
@@ -207,15 +216,26 @@ export class SyncEngine {
 			);
 		}
 
-		const report = await executePlan({
-			vault: this.options.vault,
-			remote: this.options.remote,
-			store: this.options.store,
-			state: this.state,
-			hash: this.hash,
-			constants: this.constants,
-			plan,
-		});
+		let report: ExecutionReport;
+		try {
+			report = await executePlan({
+				vault: this.options.vault,
+				remote: this.options.remote,
+				store: this.options.store,
+				state: this.state,
+				hash: this.hash,
+				constants: this.constants,
+				timers: this.timers,
+				plan,
+			});
+		} catch (error) {
+			// Only a failing state flush reaches here — per-operation faults are caught
+			// inside the phases. The in-memory state may now be ahead of the stored one, so
+			// the next Run has to re-persist it; every operation is redo-safe either way.
+			this.unpersisted = true;
+			this.status.set("idle");
+			return this.finish(summarize("failed", { error: errorMessage(error) }));
+		}
 		// `executePlan` flushes at its phase boundaries, so a Run that changed records has
 		// already persisted them; this covers the Re-Bootstrap that changed none.
 		if (this.unpersisted && !report.stateChanged) {
@@ -224,18 +244,26 @@ export class SyncEngine {
 		this.unpersisted = false;
 		this.status.set("idle");
 
+		// A path the re-stat guard skipped is not a failure — it is work the next Run has
+		// to do, so it goes straight back into the Dirty Set (spec §5.5).
+		if (report.requeue.length > 0) {
+			void this.scheduler.request({ trigger: "vault-event", scope: pathScope(report.requeue) });
+		}
+
 		const clean =
 			report.failures.length === 0 &&
 			report.skipped === 0 &&
-			report.deferred === 0 &&
+			report.requeue.length === 0 &&
 			report.conflicts === 0;
 		return this.finish(
 			summarize(clean ? "ok" : "partial", {
 				uploaded: report.uploaded,
 				downloaded: report.downloaded,
 				identical: report.identical,
+				moved: report.moved,
+				deleted: report.deleted,
 				conflicts: report.conflicts,
-				deferred: report.deferred,
+				requeued: report.requeue.length,
 				skipped: report.skipped,
 				failures: report.failures,
 			}),

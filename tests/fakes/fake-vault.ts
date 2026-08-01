@@ -23,6 +23,9 @@ export class FakeVault implements VaultPort {
 	/** Soft-deleted files, by the path they had — assertions about non-destruction. */
 	readonly trashed = new Map<string, Uint8Array>();
 
+	/** Folders trashed, in the order they were, so phase 5's ordering is observable. */
+	readonly trashedFolders: string[] = [];
+
 	/** Call counts, so tests can prove the change-detection cheap path skipped a read. */
 	readonly calls = { list: 0, stat: 0, read: 0, write: 0 };
 
@@ -117,6 +120,7 @@ export class FakeVault implements VaultPort {
 	}
 
 	trashFolder(path: string): Promise<void> {
+		this.trashedFolders.push(path);
 		const prefix = `${path}/`;
 		for (const [filePath, file] of this.files) {
 			if (!filePath.startsWith(prefix)) continue;

@@ -38,9 +38,13 @@ export type RunSummary = {
 	downloaded: number;
 	/** Paths that needed no transfer: already identical, or only a record refresh. */
 	identical: number;
+	/** Paired renames: records that moved instead of transferring. */
+	moved: number;
+	/** Soft Deletes propagated, files only. */
+	deleted: number;
 	conflicts: number;
-	/** Planned operations belonging to a slice that is not implemented yet. */
-	deferred: number;
+	/** Paths the re-stat guard refused to touch; re-dirtied for the next Run. */
+	requeued: number;
 	skipped: number;
 	/** Per-operation failures: one bad file never blocks the rest of the vault. */
 	failures: readonly OpFailure[];

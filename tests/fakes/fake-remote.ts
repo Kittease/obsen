@@ -22,6 +22,9 @@ export class FakeRemote implements RemotePort {
 	/** Trashed files by UUID — Soft Delete keeps what it is given. */
 	readonly trashed = new Map<string, { path: string; data: Uint8Array }>();
 
+	/** Folders trashed, in the order they were, so phase 5's ordering is observable. */
+	readonly trashedFolders: string[] = [];
+
 	readonly calls = { listing: 0, download: 0, upload: 0 };
 
 	/** When set, listing entries omit `hash`: *unknown*, never *unchanged*. */
@@ -111,6 +114,7 @@ export class FakeRemote implements RemotePort {
 	}
 
 	trashFolder(path: string): Promise<void> {
+		this.trashedFolders.push(path);
 		const prefix = `${path}/`;
 		for (const [filePath, file] of this.files) {
 			if (!filePath.startsWith(prefix)) continue;

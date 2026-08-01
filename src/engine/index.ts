@@ -17,13 +17,15 @@ export {
 	RemoteUnavailableError,
 	type Observation,
 	type Operation,
-	type PendingSlice,
 	type Plan,
 	type PlanCounts,
 	type PlanProgress,
 	type SideChange,
 	type SkipReason,
 } from "./plan";
+// Only the types an `Operation` is made of — the pairing pass itself is a planner
+// internal, and the modules that need it import it directly.
+export type { FolderPairing, MoveAction, Pairing, RenameTier } from "./rename";
 export type {
 	RemoteEntry,
 	RemoteEvent,

@@ -3,21 +3,29 @@ import { errorMessage } from "./errors";
 import type { Hasher } from "./hash";
 import { ancestorPaths, isMergeable, parentPath, pathDepth } from "./paths";
 import type { RemoteEntry, RemotePort, Stat, VaultPort } from "./ports";
+import {
+	hasContentRenameSources,
+	pairByContent,
+	pairByIdentity,
+	type FolderPairing,
+	type MoveAction,
+	type Pairing,
+	type RenameTier,
+	type RenameWorld,
+} from "./rename";
 import type { SyncScope } from "./scope";
 import type { FileRecord, SyncState } from "./state";
-import type { RunScope } from "./triggers";
+import type { RenameHint, RunScope } from "./triggers";
 
 /**
- * The Run's planning half (spec §5.1–5.2): observe both sides, classify every
- * in-scope path against its record, and produce the operation plan. **Nothing is
+ * The Run's planning half (spec §5.1–5.3): observe both sides, pair renames, classify
+ * every in-scope path against its record, and produce the operation plan. **Nothing is
  * executed here** — that separation is what makes the First Link dry-run preview a
  * real preview rather than a second code path (spec §8.4).
  *
- * The decision matrix below is complete in *shape*. Deletions, rename pairing and
- * conflict resolution are later slices (tickets 032, 033), so their cells plan a
- * `pending` operation naming the slice: the plan tells the truth about what it
- * found, and the executor reports what it could not do yet instead of pretending
- * the path converged.
+ * The decision matrix is complete apart from its conflict cells: three-way merge and
+ * Conflict Copies are ticket 033, so those cells plan a `pending` operation and the
+ * executor reports what it could not do yet instead of pretending the path converged.
  */
 
 /** How one side compares to the record. `added` only occurs where no record exists. */
@@ -35,21 +43,28 @@ export type Observation = {
 	remote: SideChange;
 };
 
-/** The slice a planned-but-not-yet-executable operation belongs to. */
-export type PendingSlice = "deletes" | "renames" | "conflicts";
-
 export type SkipReason = "unwritable-path" | "duplicate-remote-path";
 
 export type Operation =
 	| { kind: "mkdir-remote"; path: string }
 	| { kind: "mkdir-local"; path: string }
+	/** A paired rename: the record moves, and at most one side has to catch up. */
+	| { kind: "move"; from: string; to: string; record: FileRecord; move: MoveAction | null; tier: RenameTier }
+	/** One remote `moveFolder`, rekeying every record it carries. */
+	| ({ kind: "move-folder" } & FolderPairing)
 	| { kind: "upload"; path: string; stat: Stat }
-	| { kind: "download"; path: string; uuid: string; expectedHash: string | null }
+	/** `stat` is the local file as classification saw it — the re-stat guard's baseline. */
+	| { kind: "download"; path: string; uuid: string; expectedHash: string | null; stat: Stat | null }
 	/** Both sides already agree: record refresh only, no transfer. */
 	| { kind: "converge"; path: string; record: FileRecord }
 	/** Gone from both sides, or out of scope: drop the record, touch nothing. */
 	| { kind: "forget"; path: string }
-	| { kind: "pending"; path: string; slice: PendingSlice; detail: string }
+	| { kind: "trash-remote"; path: string; uuid: string }
+	| { kind: "trash-local"; path: string; stat: Stat }
+	| { kind: "trash-folder-remote"; path: string }
+	| { kind: "trash-folder-local"; path: string }
+	/** A Conflict the merge slice (ticket 033) owns: found and reported, never resolved here. */
+	| { kind: "pending"; path: string; detail: string }
 	| { kind: "skip"; path: string; reason: SkipReason; detail: string };
 
 export type PlanCounts = {
@@ -57,9 +72,11 @@ export type PlanCounts = {
 	download: number;
 	/** Already identical, or needing only a record refresh. */
 	identical: number;
+	/** Paired renames — records that move rather than transfer. */
+	moved: number;
+	/** Soft Deletes, files only; the folders that follow are bookkeeping. */
+	deleted: number;
 	conflict: number;
-	/** Operations awaiting a later slice. */
-	deferred: number;
 	skipped: number;
 };
 
@@ -84,6 +101,8 @@ export type PlanInput = {
 	run: RunScope;
 	hash: Hasher;
 	constants: EngineConstants;
+	/** Rename Hints from this Run's Dirty Set, consumed by tier 2 of the pairing pass. */
+	hints?: readonly RenameHint[];
 	onProgress?: (progress: PlanProgress) => void;
 };
 
@@ -95,24 +114,41 @@ export class RemoteUnavailableError extends Error {
 	}
 }
 
+/** Narrows {@link Operation} to one of its kinds; shared with the executor. */
+export type OpOf<K extends Operation["kind"]> = Extract<Operation, { kind: K }>;
+
+/** A path as the Run currently sees it, before classification. */
+type Draft = {
+	path: string;
+	record: FileRecord | null;
+	stat: Stat | null;
+	entry: RemoteEntry | null;
+	/**
+	 * Where the local bytes actually live right now. A pairing can move a record onto a
+	 * path the vault does not hold *yet* — until phase 2 performs the rename, reading the
+	 * file means reading its old path.
+	 */
+	readPath: string;
+};
+
 export async function computePlan(input: PlanInput): Promise<Plan> {
 	const { vault, state, scope, run, constants, onProgress } = input;
 
 	onProgress?.({ phase: "listing" });
-	const { entries, skips } = await remoteListing(input);
+	const { entries, remotePaths, skips } = await remoteListing(input);
 
 	onProgress?.({ phase: "scanning" });
 	// FULL Runs scan the vault once; scoped Runs stat only their paths. Scope
 	// constrains the local side only — the remote listing is always complete, which
 	// is what makes socket gaps cost latency rather than correctness (spec §5.1).
-	const localScan = run.kind === "full" ? await localFiles(vault, scope) : null;
-	const diff = diffSet({ run, scope, state, entries, localScan });
+	const scan = run.kind === "full" ? await vault.list() : null;
+	const localScan = scan ? scoped(scan, scope) : null;
 
-	const observations = await observe({ ...input, diff, entries, localScan });
+	const { drafts, renames } = await observe({ ...input, entries, localScan, scan });
 
-	const operations: Operation[] = [...skips];
-	for (const observation of observations) {
-		const operation = decide(observation, constants, vault);
+	const operations: Operation[] = [...skips, ...renames];
+	for (const draft of [...drafts.values()].sort(byPath)) {
+		const operation = decide(draft.observation, constants, vault);
 		if (operation) operations.push(operation);
 	}
 	// A path that left the Sync Scope loses its record as bookkeeping — never as a
@@ -124,6 +160,7 @@ export async function computePlan(input: PlanInput): Promise<Plan> {
 		}
 	}
 	operations.push(...folderOperations(operations, entries));
+	operations.push(...folderTrashes(operations, remotePaths, scan));
 
 	return { scope: run, operations, counts: count(operations), conflictPaths: conflicts(operations, constants) };
 }
@@ -131,7 +168,7 @@ export async function computePlan(input: PlanInput): Promise<Plan> {
 /** The remote side of the diff, keyed by path, with duplicate paths surfaced. */
 async function remoteListing(
 	input: PlanInput,
-): Promise<{ entries: Map<string, RemoteEntry>; skips: Operation[] }> {
+): Promise<{ entries: Map<string, RemoteEntry>; remotePaths: string[]; skips: Operation[] }> {
 	let listing: RemoteEntry[];
 	try {
 		listing = await input.remote.listing();
@@ -166,21 +203,22 @@ async function remoteListing(
 			detail: `a second remote file (${dropped.uuid}) holds this path`,
 		});
 	}
-	return { entries, skips };
+	// Every path Filen holds, scope or no scope: emptied-folder detection must not read
+	// out-of-scope content as absent and trash the folder around it.
+	return { entries, remotePaths: listing.map((entry) => entry.path), skips };
 }
 
-async function localFiles(vault: VaultPort, scope: SyncScope): Promise<Map<string, Stat>> {
-	const files = new Map<string, Stat>();
-	for (const file of await vault.list()) {
-		if (scope(file.path)) files.set(file.path, file.stat);
-	}
-	return files;
+function scoped(files: { path: string; stat: Stat }[], scope: SyncScope): Map<string, Stat> {
+	const inScope = new Map<string, Stat>();
+	for (const file of files) if (scope(file.path)) inScope.set(file.path, file.stat);
+	return inScope;
 }
 
 /**
  * Which paths this Run judges: its scope, plus every path the remote listing
- * disagrees with the state about. That expansion is free (both sides are already in
- * memory) and is why every Run, however small, catches all remote changes.
+ * disagrees with the state about, plus both ends of every Rename Hint. The remote
+ * expansion is free (both sides are already in memory) and is why every Run, however
+ * small, catches all remote changes.
  */
 function diffSet(input: {
 	run: RunScope;
@@ -188,8 +226,9 @@ function diffSet(input: {
 	state: SyncState;
 	entries: Map<string, RemoteEntry>;
 	localScan: Map<string, Stat> | null;
+	hints: readonly RenameHint[];
 }): string[] {
-	const { run, scope, state, entries, localScan } = input;
+	const { run, scope, state, entries, localScan, hints } = input;
 	const paths = new Set<string>();
 
 	if (run.kind === "full") {
@@ -207,66 +246,155 @@ function diffSet(input: {
 	for (const path of state.files.keys()) {
 		if (scope(path) && !entries.has(path)) paths.add(path);
 	}
+	// A hint is only evidence if the Run looks at both of its ends. For a folder hint
+	// that means every record underneath it and the path each one claims to have moved to.
+	for (const hint of hints) {
+		for (const path of [hint.from, hint.to]) if (scope(path)) paths.add(path);
+		const prefix = `${hint.from}/`;
+		for (const path of state.files.keys()) {
+			if (!path.startsWith(prefix)) continue;
+			const moved = `${hint.to}/${path.slice(prefix.length)}`;
+			if (scope(path)) paths.add(path);
+			if (scope(moved)) paths.add(moved);
+		}
+	}
 
 	return [...paths].sort();
 }
 
-/** Stats, hashes where needed, and classifies every path in the diff set. */
+/**
+ * Stats, pairs renames, hashes where needed, and classifies every path in the diff set.
+ *
+ * The order matters: tiers 1 and 2 need no content at all, so they run first and can
+ * remove paths from the set before anything is read. Only tier 3 costs reads, and only
+ * when a vanished file leaves something for it to look for.
+ */
 async function observe(
 	input: PlanInput & {
-		diff: string[];
 		entries: Map<string, RemoteEntry>;
 		localScan: Map<string, Stat> | null;
+		scan: { path: string; stat: Stat }[] | null;
 	},
-): Promise<Observation[]> {
-	const { vault, state, diff, entries, localScan, run, hash, onProgress } = input;
+): Promise<{ drafts: Map<string, Draft & { observation: Observation }>; renames: Operation[] }> {
+	const { vault, state, entries, localScan, run, scope, hash, onProgress } = input;
+	const hints = input.hints ?? [];
 	const rehash = run.kind === "full" && run.rehash === true;
 
-	type Draft = { path: string; record: FileRecord | null; stat: Stat | null; entry: RemoteEntry | null };
-	const drafts: Draft[] = [];
-	for (const path of diff) {
+	const drafts = new Map<string, Draft>();
+	for (const path of diffSet({ run, scope, state, entries, localScan, hints })) {
 		const stat = localScan ? (localScan.get(path) ?? null) : await vault.stat(path);
-		drafts.push({
+		drafts.set(path, {
 			path,
 			record: state.files.get(path) ?? null,
 			stat,
 			entry: entries.get(path) ?? null,
+			readPath: path,
 		});
 	}
 
-	const needsHash = drafts.filter((draft) => wantsHash(draft, rehash));
-	const observations: Observation[] = [];
-	let hashed = 0;
-	if (needsHash.length > 0) onProgress?.({ phase: "hashing", done: 0, total: needsHash.length });
+	const identity = pairByIdentity(world(drafts, entries, scope), hints);
+	rekeyDrafts(drafts, identity.files);
 
-	for (const draft of drafts) {
-		let contentHash: string | null = null;
-		if (wantsHash(draft, rehash)) {
-			// Sequential: reads are whole-file and the progress count must be honest.
-			contentHash = await hash(await vault.read(draft.path));
-			hashed += 1;
-			onProgress?.({ phase: "hashing", done: hashed, total: needsHash.length });
-		} else if (draft.stat && draft.record) {
-			// The cheap path (spec §3.2): size and mtime both unchanged, so the stored
-			// hash still describes the file and no read happens at all.
-			contentHash = draft.record.lastSyncedHash;
-		}
-		observations.push(classify({ ...draft, hash: contentHash }));
+	// Hashing does not change what the pairing pass sees, so tier 3 judges the same world
+	// the "is tier 3 worth reading files for?" question was answered against.
+	const paired = world(drafts, entries, scope);
+	const hashes = new Map<string, string>();
+	const tierThree = hasContentRenameSources(paired);
+	const needsHash = [...drafts.values()].filter((draft) => wantsHash(draft, rehash, tierThree));
+	if (needsHash.length > 0) onProgress?.({ phase: "hashing", done: 0, total: needsHash.length });
+	let hashed = 0;
+	for (const draft of needsHash) {
+		// Sequential: reads are whole-file and the progress count must be honest.
+		hashes.set(draft.path, await hash(await vault.read(draft.readPath)));
+		hashed += 1;
+		onProgress?.({ phase: "hashing", done: hashed, total: needsHash.length });
 	}
-	return observations;
+
+	const content = pairByContent(paired, hashes);
+	rekeyDrafts(drafts, content);
+
+	const classified = new Map<string, Draft & { observation: Observation }>();
+	for (const draft of drafts.values()) {
+		// The cheap path (spec §3.2): with size and mtime both unchanged the stored hash
+		// still describes the file, so no read happened at all.
+		const contentHash =
+			hashes.get(draft.path) ?? (draft.stat && draft.record ? draft.record.lastSyncedHash : null);
+		classified.set(draft.path, { ...draft, observation: classify(draft, contentHash) });
+	}
+	return { drafts: classified, renames: moveOperations(identity.folders, [...identity.files, ...content]) };
+}
+
+function world(
+	drafts: ReadonlyMap<string, Draft>,
+	entries: Map<string, RemoteEntry>,
+	scope: SyncScope,
+): RenameWorld {
+	const records = new Map<string, FileRecord>();
+	const stats = new Map<string, Stat | null>();
+	for (const draft of drafts.values()) {
+		if (draft.record) records.set(draft.path, draft.record);
+		stats.set(draft.path, draft.stat);
+	}
+	return { records, stats, entries, scope };
+}
+
+/**
+ * Folds each pairing into the draft it lands on: the record moves to `to`, and so does
+ * whichever side's observation was still filed under `from`. Classification then judges
+ * one path holding one file, and a rename that also changed content falls out as an
+ * ordinary upload.
+ */
+function rekeyDrafts(drafts: Map<string, Draft>, pairings: readonly Pairing[]): void {
+	for (const pairing of pairings) {
+		const from = drafts.get(pairing.from);
+		const to = drafts.get(pairing.to);
+		drafts.delete(pairing.from);
+		const stat = to?.stat ?? from?.stat ?? null;
+		drafts.set(pairing.to, {
+			path: pairing.to,
+			record: pairing.record,
+			stat,
+			entry: to?.entry ?? from?.entry ?? null,
+			// Until phase 2 performs the local rename, the bytes are still at the old path.
+			readPath: to?.stat ? pairing.to : from?.stat ? pairing.from : pairing.to,
+		});
+	}
+}
+
+function moveOperations(
+	folders: readonly FolderPairing[],
+	files: readonly Pairing[],
+): Operation[] {
+	const operations: Operation[] = folders.map((folder) => ({
+		kind: "move-folder",
+		from: folder.from,
+		to: folder.to,
+		files: folder.files,
+	}));
+	for (const pairing of files) {
+		// A record a folder move already carries must not be rekeyed twice: the folder op
+		// owns both the single remote call and the records it lands on.
+		if (pairing.folder !== null) continue;
+		operations.push({
+			kind: "move",
+			from: pairing.from,
+			to: pairing.to,
+			record: pairing.record,
+			move: pairing.move,
+			tier: pairing.tier,
+		});
+	}
+	return operations;
 }
 
 /** Whether classification needs the local file's real content hash. */
-function wantsHash(
-	draft: { record: FileRecord | null; stat: Stat | null; entry: RemoteEntry | null },
-	rehash: boolean,
-): boolean {
+function wantsHash(draft: Draft, rehash: boolean, tierThree: boolean): boolean {
 	if (!draft.stat) return false;
 	if (!draft.record) {
 		// A pure local add needs no hash to plan: the upload hashes the bytes it
-		// actually sends. A remote file at the same path does need one, to tell an
-		// identical pair from a First-Link conflict.
-		return draft.entry !== null;
+		// actually sends. It does need one to tell an identical pair from a First-Link
+		// conflict — or to stand as a candidate destination for an offline rename.
+		return draft.entry !== null || tierThree;
 	}
 	if (rehash) return true;
 	const unchanged =
@@ -274,14 +402,8 @@ function wantsHash(
 	return !unchanged;
 }
 
-function classify(draft: {
-	path: string;
-	record: FileRecord | null;
-	stat: Stat | null;
-	hash: string | null;
-	entry: RemoteEntry | null;
-}): Observation {
-	const { record, stat, hash, entry } = draft;
+function classify(draft: Draft, hash: string | null): Observation {
+	const { path, record, stat, entry } = draft;
 
 	let local: SideChange;
 	if (!stat) local = "missing";
@@ -297,7 +419,7 @@ function classify(draft: {
 	else if (entry.hash !== undefined && entry.hash === record.lastSyncedHash) remote = "unchanged";
 	else remote = "modified";
 
-	return { ...draft, local, remote };
+	return { path, record, stat, hash, entry, local, remote };
 }
 
 /**
@@ -322,12 +444,11 @@ function decide(
 			return {
 				kind: "pending",
 				path,
-				slice: "conflicts",
 				detail: "both sides hold this path at First Link",
 			};
 		}
 		if (stat) return { kind: "upload", path, stat };
-		if (entry) return download(path, entry, vault);
+		if (entry) return download(path, entry, stat, vault);
 		return null;
 	}
 
@@ -338,37 +459,30 @@ function decide(
 			? converge(path, stat, hash, entry, constants)
 			: null;
 	}
-	if (local === "unchanged" && remote === "modified" && entry) return download(path, entry, vault);
+	if (local === "unchanged" && remote === "modified" && entry) return download(path, entry, stat, vault);
 	if (local === "modified" && remote === "unchanged" && stat) return { kind: "upload", path, stat };
 	if (local === "modified" && remote === "modified") {
 		// Compare hashes before anything else: equal means both sides landed on the
 		// same content, so there is nothing to merge and nothing to transfer.
 		if (sameContent && stat && entry) return converge(path, stat, hash, entry, constants);
-		return {
-			kind: "pending",
-			path,
-			slice: "conflicts",
-			detail: "changed on both sides since the last sync",
-		};
+		return { kind: "pending", path, detail: "changed on both sides since the last sync" };
 	}
 
-	// Everything left is a deletion cell. Soft Delete propagation and edit-beats-delete
-	// restoration land together in ticket 032 — shipping half of "edit beats delete"
-	// would read as working deletion support.
-	const detail =
-		local === "missing" && remote === "modified"
-			? "deleted locally, edited remotely (edit beats delete)"
-			: local === "modified" && remote === "missing"
-				? "edited locally, deleted remotely (edit beats delete)"
-				: local === "missing"
-					? "deleted locally"
-					: "deleted remotely";
-	return { kind: "pending", path, slice: "deletes", detail };
+	// Edit beats delete (spec §5.2, ticket 007): the surviving edit is restored to the
+	// side that deleted it, because stale state must never destroy a change no one has
+	// merged yet.
+	if (local === "missing" && remote === "modified" && entry) return download(path, entry, stat, vault);
+	if (local === "modified" && remote === "missing" && stat) return { kind: "upload", path, stat };
+
+	// What is left is a genuine deletion on one side, propagated as a Soft Delete.
+	if (local === "missing") return { kind: "trash-remote", path, uuid: entry?.uuid ?? record.remoteUuid };
+	return stat ? { kind: "trash-local", path, stat } : null;
 }
 
 function download(
 	path: string,
 	entry: RemoteEntry,
+	stat: Stat | null,
 	vault: Pick<VaultPort, "isWritablePath">,
 ): Operation {
 	// A name this platform cannot materialize is Skip-and-Surfaced, never
@@ -382,7 +496,7 @@ function download(
 			detail: "this platform cannot create a file with this name",
 		};
 	}
-	return { kind: "download", path, uuid: entry.uuid, expectedHash: entry.hash ?? null };
+	return { kind: "download", path, uuid: entry.uuid, expectedHash: entry.hash ?? null, stat };
 }
 
 function converge(
@@ -415,10 +529,10 @@ function needsRefresh(record: FileRecord, stat: Stat, entry: RemoteEntry): boole
 }
 
 /**
- * Phase 1 of execution: the folders transfers need. Remote folders are derived from
- * the listing (Obsen keeps no folder records, so an empty folder simply does not
- * exist); local ones are issued blind, because `mkdir` is recursive and idempotent
- * and a scoped Run has no local folder inventory to consult.
+ * Phase 1 of execution: the folders transfers and moves need. Remote folders are
+ * derived from the listing (Obsen keeps no folder records, so an empty folder simply
+ * does not exist); local ones are issued blind, because `mkdir` is recursive and
+ * idempotent and a scoped Run has no local folder inventory to consult.
  */
 function folderOperations(operations: Operation[], entries: Map<string, RemoteEntry>): Operation[] {
 	const remoteFolders = new Set<string>();
@@ -426,11 +540,21 @@ function folderOperations(operations: Operation[], entries: Map<string, RemoteEn
 
 	const remoteMkdirs = new Set<string>();
 	const localMkdirs = new Set<string>();
+	const needRemote = (path: string): void => {
+		const parent = parentPath(path);
+		if (parent !== null && !remoteFolders.has(parent)) remoteMkdirs.add(parent);
+	};
+	const needLocal = (path: string): void => {
+		const parent = parentPath(path);
+		if (parent !== null) localMkdirs.add(parent);
+	};
+
 	for (const operation of operations) {
-		const parent = parentPath(operation.path);
-		if (parent === null) continue;
-		if (operation.kind === "upload" && !remoteFolders.has(parent)) remoteMkdirs.add(parent);
-		if (operation.kind === "download") localMkdirs.add(parent);
+		if (operation.kind === "upload") needRemote(operation.path);
+		else if (operation.kind === "download") needLocal(operation.path);
+		else if (operation.kind === "move-folder") needRemote(operation.to);
+		else if (operation.kind === "move" && operation.move?.side === "remote") needRemote(operation.to);
+		else if (operation.kind === "move" && operation.move?.side === "local") needLocal(operation.to);
 	}
 
 	const byDepth = (a: string, b: string): number => pathDepth(a) - pathDepth(b) || a.localeCompare(b);
@@ -440,13 +564,90 @@ function folderOperations(operations: Operation[], entries: Map<string, RemoteEn
 	];
 }
 
-function count(operations: Operation[]): PlanCounts {
+/**
+ * Phase 5: the folders this Run's deletes emptied. Computed from the *unfiltered* view
+ * of each side — a folder still holding content the Sync Scope hides is not empty, and
+ * trashing it around that content would be the one destructive thing Obsen must never do.
+ *
+ * A file merely moved out of a folder does not empty it for this purpose: an empty
+ * folder costs nothing and never syncs, so only a deletion is worth acting on.
+ */
+function folderTrashes(
+	operations: readonly Operation[],
+	remotePaths: readonly string[],
+	scan: { path: string; stat: Stat }[] | null,
+): Operation[] {
+	const trashed = (kind: "trash-remote" | "trash-local"): string[] =>
+		operations
+			.filter((operation): operation is OpOf<typeof kind> => operation.kind === kind)
+			.map((operation) => operation.path);
+
+	const remote = emptiedFolders(trashed("trash-remote"), [
+		...remotePaths,
+		...creations(operations, "remote"),
+	]);
+	// Without a full local scan there is no inventory to prove a folder is empty; the
+	// next FULL Reconcile — startup or Foreground-Resume — cleans up.
+	const local = scan
+		? emptiedFolders(trashed("trash-local"), [
+				...scan.map((file) => file.path),
+				...creations(operations, "local"),
+			])
+		: [];
+	return [
+		...remote.map((path): Operation => ({ kind: "trash-folder-remote", path })),
+		...local.map((path): Operation => ({ kind: "trash-folder-local", path })),
+	];
+}
+
+/**
+ * Where this plan will put a file on one side. Counted as inventory, because the
+ * emptiness test runs against a snapshot taken *before* execution: a folder losing its
+ * last old file while phase 3 lands a new one in it is not empty, and phase 5's
+ * recursive trash would otherwise delete the file phase 3 had just transferred.
+ */
+function creations(operations: readonly Operation[], side: "local" | "remote"): string[] {
+	const paths: string[] = [];
+	for (const operation of operations) {
+		if (operation.kind === "upload" && side === "remote") paths.push(operation.path);
+		else if (operation.kind === "download" && side === "local") paths.push(operation.path);
+		else if (operation.kind === "move" && operation.move?.side === side) paths.push(operation.to);
+		else if (operation.kind === "move-folder" && side === "remote") {
+			for (const file of operation.files) paths.push(file.to);
+		}
+	}
+	return paths;
+}
+
+function emptiedFolders(trashed: readonly string[], all: readonly string[]): string[] {
+	if (trashed.length === 0) return [];
+	const gone = new Set(trashed);
+	const survivors = all.filter((path) => !gone.has(path));
+	const candidates = new Set<string>();
+	for (const path of trashed) for (const folder of ancestorPaths(path)) candidates.add(folder);
+
+	const emptied = [...candidates].filter(
+		(folder) => !survivors.some((path) => path.startsWith(`${folder}/`)),
+	);
+	// `trashFolder` is recursive, so only the topmost emptied folder of a chain is
+	// issued; the deepest-first ordering is what keeps siblings deterministic.
+	return emptied
+		.filter((folder) => !emptied.some((other) => folder.startsWith(`${other}/`)))
+		.sort((a, b) => pathDepth(b) - pathDepth(a) || a.localeCompare(b));
+}
+
+function byPath(a: { path: string }, b: { path: string }): number {
+	return a.path.localeCompare(b.path);
+}
+
+function count(operations: readonly Operation[]): PlanCounts {
 	const counts: PlanCounts = {
 		upload: 0,
 		download: 0,
 		identical: 0,
+		moved: 0,
+		deleted: 0,
 		conflict: 0,
-		deferred: 0,
 		skipped: 0,
 	};
 	for (const operation of operations) {
@@ -460,12 +661,21 @@ function count(operations: Operation[]): PlanCounts {
 			case "converge":
 				counts.identical += 1;
 				break;
+			case "move":
+				counts.moved += 1;
+				break;
+			case "move-folder":
+				counts.moved += operation.files.length;
+				break;
+			case "trash-remote":
+			case "trash-local":
+				counts.deleted += 1;
+				break;
 			case "skip":
 				counts.skipped += 1;
 				break;
 			case "pending":
-				if (operation.slice === "conflicts") counts.conflict += 1;
-				else counts.deferred += 1;
+				counts.conflict += 1;
 				break;
 			default:
 				break;
@@ -474,9 +684,9 @@ function count(operations: Operation[]): PlanCounts {
 	return counts;
 }
 
-function conflicts(operations: Operation[], constants: EngineConstants): string[] {
+function conflicts(operations: readonly Operation[], constants: EngineConstants): string[] {
 	return operations
-		.filter((operation) => operation.kind === "pending" && operation.slice === "conflicts")
+		.filter((operation) => operation.kind === "pending")
 		.map((operation) => operation.path)
 		.slice(0, constants.conflictPreviewLimit);
 }
