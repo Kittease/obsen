@@ -17,7 +17,14 @@ const MOBILE_SAFETY =
 	"Obsen runs on mobile: no Node APIs. Use a web API, or put the dependency behind a port.";
 
 /** Files that run under Node (build scripts, tests) or predate the DOM (shims). */
-const nodeSideFiles = ["build/**", "tests/**", "shims/**", "*.config.ts", "*.config.mjs"];
+const nodeSideFiles = [
+	"build/**",
+	"tests/**",
+	"shims/**",
+	"*.config.ts",
+	"*.config.mjs",
+	"wdio.conf.ts",
+];
 
 /**
  * The recommended config enables `obsidianmd/validate-manifest`, but registers it
@@ -45,7 +52,9 @@ export default defineConfig([
 		files: ["**/*.ts"],
 		languageOptions: {
 			parser: tseslint.parser,
-			parserOptions: { project: "./tsconfig.json" },
+			// Both projects: layer 3's specs live in their own so that WebdriverIO's and
+			// Mocha's globals stay out of the vitest suites.
+			parserOptions: { project: ["./tsconfig.json", "./tests/wdio/tsconfig.json"] },
 		},
 	},
 
@@ -94,6 +103,9 @@ export default defineConfig([
 			// There is no `window` to prefer a timer from in a headless test run.
 			"obsidianmd/prefer-window-timers": "off",
 			"no-restricted-globals": "off",
+			// TypeScript resolves identifiers better than this rule does, and it cannot
+			// see ambient namespaces at all — `WebdriverIO.Config` reads as undefined.
+			"no-undef": "off",
 		},
 	},
 ]);

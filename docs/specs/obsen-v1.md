@@ -41,7 +41,7 @@ interface VaultPort {
   list(): Promise<{ path: string; stat: Stat }[]>;      // full scan, NFC paths
   stat(path: string): Promise<Stat | null>;
   read(path: string): Promise<Uint8Array>;
-  write(path: string, data: Uint8Array): Promise<Stat>; // ATOMIC (tmp+rename)
+  write(path: string, data: Uint8Array): Promise<Stat>; // ATOMIC (tmp+rename) for a new file — see below
   rename(from: string, to: string): Promise<Stat>;
   trash(path: string): Promise<void>;                   // Obsidian's configured trash
   mkdir(path: string): Promise<void>;
@@ -76,6 +76,8 @@ interface StorePort {                 // sync-state.json + shadow/
   deleteShadow(hash: string): Promise<void>;
 }
 ```
+
+**Amendment (ticket [029](../tickets/029-impl-obsidian-adapters-and-wdio.md), from real Obsidian):** `VaultPort.write` is atomic for a file that does not exist yet, and for everything in `<configDir>/`. **Overwriting a file Obsidian has indexed is not**, because renaming over one makes Obsidian's watcher read a delete followed by a create and **close the editor tab the note is open in** — which would shut the user's note on every remote edit that arrived while they were reading it. Overwrites go through `Vault.modifyBinary`, the call Obsidian's own editor saves through, leaving them exactly as exposed to a torn write as any note the user types; the next Run's re-hash repairs one. The measurement and the regression test are in `tests/wdio/vault-port.e2e.ts`.
 
 ### 1.2 Bundling — the mobile-safety gate ([014 research](../research/014-sdk-in-obsidian-feasibility.md), [017 research](../research/017-plugin-guidelines-and-brat.md))
 

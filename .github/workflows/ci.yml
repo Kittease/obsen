@@ -41,3 +41,60 @@ jobs:
       # ours or a dependency's — fails here instead of on a user's phone.
       - name: Mobile-safety gate
         run: npm run gate
+
+  # Layer 3 (spec §9): the plugin inside a real, sandboxed Obsidian. Its own job
+  # because it downloads Obsidian and needs a display, and because a failure here
+  # means something different from a unit-test failure: the environment disagrees
+  # with the adapters, not the adapters with themselves.
+  obsidian:
+    name: Obsidian integration (wdio)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - run: npm ci
+
+      # The plugin is installed from the repo root, so the bundle has to exist first.
+      - name: Build the plugin
+        run: npm run build
+
+      # Keyed on the versions the matrix actually resolves to, not on the strings that
+      # asked for them: "latest" names a different download every few weeks, and a key
+      # that did not move with it would serve a cache that is missing the new one.
+      - name: Resolve the Obsidian version matrix
+        id: versions
+        run: |
+          node --input-type=module -e '
+            import { parseObsidianVersions } from "wdio-obsidian-service";
+            const asked = process.env.OBSIDIAN_VERSIONS ?? "earliest latest";
+            const resolved = await parseObsidianVersions(asked, { cacheDir: ".obsidian-cache" });
+            console.log(`key=${resolved.map((pair) => pair.join("-")).join("_")}`);
+          ' >> "$GITHUB_OUTPUT"
+
+      - name: Cache Obsidian downloads
+        uses: actions/cache@v4
+        with:
+          path: .obsidian-cache
+          key: obsidian-cache-${{ runner.os }}-${{ steps.versions.outputs.key }}
+
+      # Obsidian is Electron: there is no headless mode. A virtual display is not
+      # enough on its own either — the service's own CI warns that some Obsidian
+      # features misbehave without a window manager, so one runs alongside Xvfb.
+      - name: Start a virtual display and a window manager
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y xvfb herbstluftwm
+          Xvfb :99 -screen 0 1280x1024x24 +extension GLX &
+          sleep 2
+          DISPLAY=:99 herbstluftwm &
+          sleep 2
+
+      - name: Obsidian integration tests
+        run: npx wdio run ./wdio.conf.ts
+        env:
+          DISPLAY: ":99"

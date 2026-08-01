@@ -7,7 +7,7 @@ import { build, type Metafile } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { bundleOptions, repoRoot, SHIM_ALIASES } from "../../build/esbuild-options.ts";
-import { evaluateBundle, type StubPlugin } from "../helpers/browser-sandbox.ts";
+import { evaluateBundle, stubApp, type StubPlugin } from "../helpers/browser-sandbox.ts";
 
 /**
  * Layer 2 of the testing strategy (spec §9): the mobile-safety gate.
@@ -114,7 +114,9 @@ describe("the production bundle", () => {
 
 	it("leaves `obsidian` external and requires nothing else at load", async () => {
 		const { requires } = await evaluateBundle(mainJs);
-		expect(requires).toEqual(["obsidian"]);
+		// By module id, not by call: esbuild emits one `require` per module that imports
+		// `obsidian`, and how many of ours do is not a property worth asserting.
+		expect([...new Set(requires)]).toEqual(["obsidian"]);
 	});
 
 	it("evaluates with no Node globals present and exports a plugin class", async () => {
@@ -122,24 +124,26 @@ describe("the production bundle", () => {
 		expect(typeof exports.default).toBe("function");
 	});
 
-	it("constructs a FilenSDK during onload, in the webview realm", async () => {
+	it("constructs its ports and a FilenSDK during onload, in the webview realm", async () => {
 		// Ticket 026's headline acceptance criterion, checked where a phone would
 		// break: no process, no Buffer, no bare `global`.
 		const { exports } = await evaluateBundle(mainJs);
 		const PluginClass = exports.default as new (app: unknown, manifest: unknown) => StubPlugin;
-		const plugin = new PluginClass(undefined, { id: "obsen", version: "0.0.0-test" });
+		const plugin = new PluginClass(stubApp(), { id: "obsen", version: "0.0.0-test" });
 
 		await plugin.onload?.();
 		expect(plugin.filen).toBeTruthy();
+		expect(plugin.ports).toBeTruthy();
 
 		await plugin.onunload?.();
 		expect(plugin.filen).toBeNull();
+		expect(plugin.ports).toBeNull();
 	});
 
 	it("carries a Sync Engine that works with only webview globals", async () => {
-		// The engine is not reachable from `main.ts` yet (its adapters arrive with
-		// tickets 028–029), so the gate bundles it directly rather than waiting to
-		// discover on a phone that WebCrypto hashing was the one thing missing.
+		// The ports reach `main.ts`, but nothing constructs a `SyncEngine` until the
+		// triggers are wired (ticket 034) — so the gate bundles it directly rather than
+		// waiting to discover on a phone that WebCrypto hashing was the one thing missing.
 		const probe = await bundleSource(
 			"engine-probe",
 			[

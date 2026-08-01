@@ -29,9 +29,18 @@ export interface VaultPort {
 	stat(path: string): Promise<Stat | null>;
 	read(path: string): Promise<Uint8Array>;
 	/**
-	 * ATOMIC (tmp + rename): a reader either sees the previous bytes or all of the
-	 * new ones. Returns the resulting stat so the caller can record it without a
-	 * second round trip. Parent folders must already exist — see {@link mkdir}.
+	 * Creates or replaces a file, returning the resulting stat so the caller can record
+	 * it without a second round trip. Parent folders must already exist — see
+	 * {@link mkdir}.
+	 *
+	 * **Atomic (tmp + rename) when the file is new**, so a reader never sees half of
+	 * one. Replacing an *existing* file is the adapter's choice of write, and the
+	 * Obsidian one deliberately is not atomic: renaming over a file Obsidian has indexed
+	 * closes the editor tab it is open in (measured on ticket 029, asserted in
+	 * `tests/wdio/vault-port.e2e.ts`), which would shut the user's note whenever a
+	 * remote edit landed. An overwrite there is as exposed to a torn write as any note
+	 * the user types — and a torn file is repaired by the next Run's re-hash, which is
+	 * why the engine may not assume otherwise.
 	 */
 	write(path: string, data: Uint8Array): Promise<Stat>;
 	rename(from: string, to: string): Promise<Stat>;

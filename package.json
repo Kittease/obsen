@@ -12,10 +12,11 @@
   "scripts": {
     "dev": "node build/build.ts --watch",
     "build": "npm run typecheck && node build/build.ts --production",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tests/wdio",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --project unit",
     "gate": "vitest run --project gate",
+    "test:wdio": "npm run build && wdio run ./wdio.conf.ts",
     "test:remote": "node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run --project remote",
     "verify": "npm run lint && npm run typecheck && npm run test && npm run gate"
   },
@@ -26,13 +27,22 @@
     "path-browserify": "1.0.1"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^24.0.0",
+    "@wdio/cli": "^9.30.0",
+    "@wdio/globals": "^9.29.1",
+    "@wdio/local-runner": "^9.30.0",
+    "@wdio/mocha-framework": "^9.30.0",
     "esbuild": "0.28.1",
     "eslint": "^9.0.0",
     "eslint-plugin-obsidianmd": "0.4.1",
     "obsidian": "^1.8.7",
+    "obsidian-launcher": "^3.1.1",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.0.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "wdio-obsidian-reporter": "^3.1.1",
+    "wdio-obsidian-service": "^3.1.1",
+    "webdriverio": "^9.30.0"
   }
 }

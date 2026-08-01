@@ -18,5 +18,7 @@
     "noEmit": true
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "build/**/*.ts", "vitest.config.ts"],
-  "exclude": ["node_modules", "prototypes"]
+  // `tests/wdio` has its own project: its Mocha and WebdriverIO globals have no
+  // business being visible to the vitest suites.
+  "exclude": ["node_modules", "prototypes", "tests/wdio"]
 }

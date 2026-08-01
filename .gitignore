@@ -1,8 +1,16 @@
 .obsidian/
+# …except the wdio fixture vault's, which is test data: the Exclusion List (spec §2.1)
+# is mostly about `.obsidian/`, so a fixture without one could not exercise it.
+!tests/wdio/fixtures/vault/.obsidian/
 node_modules/
 
 # Build output: main.js is the release artifact, rebuilt from source at tag time.
 main.js
+
+# Layer 3's Obsidian downloads and run logs (spec §9). The cache is what makes a
+# second wdio run fast, but it is not source.
+.obsidian-cache/
+wdio-logs/
 
 # The real-remote suite's Filen test-account credentials (spec §9 layer 4).
 # `npm run test:remote` reads this file if it is there; it must never be committed.

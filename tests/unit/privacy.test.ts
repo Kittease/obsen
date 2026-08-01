@@ -60,8 +60,13 @@ describe("no personal details in the repo", () => {
 			// docs/tickets/*.md carry the claiming user's git email in `assignee:` by
 			// deliberate exception — that identity is already public in commit history.
 			const isTicket = path.startsWith("docs/tickets/");
+			// npm copies package authors' deprecation notices into the lockfile verbatim,
+			// and some of them carry an address. Only that one field is exempt: the rest of
+			// the lockfile — repository URLs above all — is still scanned.
+			const isLockfile = path === "package-lock.json";
 			content.split("\n").forEach((line, index) => {
 				if (isTicket && line.startsWith("assignee:")) return;
+				if (isLockfile && /^\s*"deprecated":/.test(line)) return;
 				for (const match of line.match(EMAIL) ?? []) {
 					offenders.push(`${path}:${index + 1} ${match}`);
 				}

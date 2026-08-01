@@ -1,0 +1,11 @@
+{
+	"// ": "Layer 3 runs under WebdriverIO and Mocha, whose globals (`browser`, `expect`, `describe`) would otherwise leak into the vitest suites. Its own project keeps them here. Typechecked by `npm run typecheck`, alongside the root one.",
+	"extends": "../../tsconfig.json",
+	"compilerOptions": {
+		"types": ["node", "mocha", "@wdio/globals/types", "expect-webdriverio"]
+	},
+	// The root config excludes `tests/wdio` so its globals stay out of the vitest
+	// suites; inheriting that exclusion here would leave this project compiling nothing.
+	"exclude": ["../../node_modules"],
+	"include": ["./**/*.ts", "../../wdio.conf.ts"]
+}

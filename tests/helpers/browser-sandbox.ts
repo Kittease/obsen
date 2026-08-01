@@ -35,7 +35,22 @@ function createObsidianStub(): Record<string, unknown> {
 			public manifest: unknown,
 		) {}
 	}
-	return { Plugin };
+	// `Platform` is read at construction time by the Obsidian adapters (spec §5.8's
+	// Windows name rules); the gate cares that reading it does not crash, not what it says.
+	return { Plugin, Platform: { isWin: false, isMobile: false, isDesktop: true } };
+}
+
+/**
+ * The least `App` the plugin shell can be constructed against. The gate is checking
+ * that `onload` runs in a webview realm, not that Obsidian works — real Obsidian is
+ * ticket 029's wdio harness.
+ */
+export function stubApp(): Record<string, unknown> {
+	return {
+		vault: { configDir: ".obsidian", adapter: {} },
+		fileManager: {},
+		workspace: {},
+	};
 }
 
 /** The globals a webview has. Anything Node-only is deliberately absent. */
