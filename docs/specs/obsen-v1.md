@@ -83,7 +83,7 @@ interface StorePort {                 // sync-state.json + shadow/
 
 `@filen/sdk@0.4.2`'s browser build bundles with **build-time shims only, zero SDK source modifications** — the exact esbuild invocation and verbatim shim files are in the [014 research doc](../research/014-sdk-in-obsidian-feasibility.md) and were proven on a real Android phone ([019](../tickets/019-prototype-on-device-spike.md)). Summary: 8 module aliases (empty stubs `crypto`/`https`/`url`/`fs-extra`/`progress-stream`; functional stubs `os`/`stream`; real polyfills `events`/`path-browserify`), `--inject`ed `Buffer`/`process`, and the load-bearing `--define:global=globalThis`. Bundle: 2.6 MB raw / 1.2 MB minified, ~45 ms parse on desktop. The shim list is coupled to 0.4.2's import graph — re-run the bundle gate on every SDK bump.
 
-SDK surfaces used (all browser-pathed, verified): `login`, auth-config export/re-init, `cloud.listDirectory` (listing via `/v3/dir/tree`), `cloud.uploadWebFile` (never `fs.writeFile` — Node-stream dead end), `cloud.downloadFileToReadableStream`, move/rename, trash, `sdk.socket`. All four Filen API hosts answer CORS preflights with `*`; if webview XHR ever misbehaves, `FilenSDK` accepts a custom `axiosInstance` backed by Obsidian's `requestUrl` (documented escape hatch, not used by default).
+SDK surfaces used (all browser-pathed, verified): `login`, auth-config export/re-init, `cloud.getDirectoryTree` (the whole recursive listing in one call, decrypted and path-keyed, via `/v3/dir/download`), `cloud.uploadWebFile` (never `fs.writeFile` — Node-stream dead end), `cloud.downloadFileToReadableStream`, move/rename, trash, `sdk.socket`. All four Filen API hosts answer CORS preflights with `*`; if webview XHR ever misbehaves, `FilenSDK` accepts a custom `axiosInstance` backed by Obsidian's `requestUrl` (documented escape hatch, not used by default).
 
 ### 1.3 Plugin shell lifecycle ([017 research](../research/017-plugin-guidelines-and-brat.md))
 
@@ -195,7 +195,7 @@ Triggers:
 ### 5.1 Anatomy
 
 1. **Snapshot-and-clear** the pending scope. A socket event unresolvable to a path (unknown UUID, undecryptable metadata, dropped event type) has already escalated scope to FULL — never ignored.
-2. **Full remote listing, every Run** — one cheap call (`/v3/dir/tree`; ~50–160 ms measured on-device). Scope only ever constrains the *local* side.
+2. **Full remote listing, every Run** — one cheap call (`cloud.getDirectoryTree` → `/v3/dir/download`; ~50–160 ms measured on-device). Scope only ever constrains the *local* side.
 3. **Remote-delta scope expansion**: compare the listing against the whole state by UUID; any disagreement joins the diff set for free. Every Run, however small, catches **all** remote changes — socket gaps only ever cost latency, never correctness.
 4. **Stat/hash the diff set** locally (cheap path, §3.2).
 5. **Classify → pair renames → plan → execute → commit.** The plan is fully computed before anything executes.

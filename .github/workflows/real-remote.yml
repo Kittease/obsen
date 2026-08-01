@@ -1,0 +1,45 @@
+name: Real-remote Filen suite
+
+# Layer 4 of the testing strategy (spec §9): the RemotePort adapter against a real
+# Filen account.
+#
+# Its own workflow rather than a job in CI, for one reason: `ci.yml` cancels an
+# in-progress run when the same ref is pushed again, and a cancelled run is a run
+# that skipped its teardown and left a sandbox folder on the test account. This
+# workflow's concurrency group is global — one dedicated account, so never two runs
+# at once — and never cancels.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-remote
+  cancel-in-progress: false
+
+jobs:
+  real-remote:
+    name: Real-remote Filen suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - run: npm ci
+
+      # No `if:` guard on the secrets: a fork PR simply gets empty values, and the
+      # suite skips itself when its credentials are absent. One less place for the
+      # skip condition to drift from the suite's own.
+      - name: Real-remote suite
+        run: npm run test:remote
+        env:
+          FILEN_TEST_EMAIL: ${{ secrets.FILEN_TEST_EMAIL }}
+          FILEN_TEST_PASSWORD: ${{ secrets.FILEN_TEST_PASSWORD }}

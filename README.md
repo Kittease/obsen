@@ -103,6 +103,34 @@ platform, so any Node built-in reaching the bundle — from Obsen or from a depe
 build error rather than a crash on a phone, and it evaluates the built `main.js` in a
 webview-like sandbox with no Node globals at all. Run it on every `@filen/sdk` bump.
 
+### The real-remote test suite
+
+```sh
+npm run test:remote
+```
+
+This one talks to Filen for real, to check that the assumptions Obsen's sync algorithm
+rests on are still true — that a content update mints a new file id, that a rename keeps
+it, that the content hash Filen stores is the one Obsen computes. Without credentials it
+skips itself, which is what it does on every fork pull request.
+
+**Use a dedicated Filen account — never your own.** Everything the suite does happens
+inside `/obsen-tests/run-<timestamp>-<random>`, and teardown permanently removes that
+folder and the trashed items that came out of it — nothing else on the account is read or
+written. Turn 2FA **off** on that account (the SDK sends a placeholder code).
+
+Credentials come from the environment, or from a `.env` file at the repo root if you make
+one (git-ignored, and `npm run test:remote` reads it automatically):
+
+```sh
+FILEN_TEST_EMAIL=…
+FILEN_TEST_PASSWORD=…
+```
+
+In CI the same two values come from repository secrets of the same names. Note that Filen's
+ingest host occasionally answers `Internal error` under repeated runs; the suite does not
+retry, so re-run a red one before believing it.
+
 ## License
 
 Obsen is licensed **AGPL-3.0-only** — see [`LICENSE`](LICENSE) for the full text. The

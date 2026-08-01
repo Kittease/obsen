@@ -79,13 +79,54 @@ describe("no personal details in the repo", () => {
 	});
 });
 
-describe("CI", () => {
-	it("is covered by the scan above", () => {
-		// Workflows are ordinary tracked files, so the checks above already police
-		// them. The real-remote suite's test-account credentials (spec §9 layer 4)
-		// arrive with ticket 028; guarding their shape before then would be a test
-		// that cannot fail.
-		const workflows = textFiles().filter(({ path }) => path.startsWith(".github/workflows/"));
-		expect(workflows.length).toBeGreaterThan(0);
+/**
+ * Workflows are ordinary tracked files, so the scan above already polices them for
+ * emails. What it cannot see is the *shape* of the real-remote suite's credential
+ * handling (spec §9 layer 4): the dedicated Filen test account must reach the suite
+ * through the environment and nowhere else.
+ */
+const CREDENTIALS = ["FILEN_TEST_EMAIL", "FILEN_TEST_PASSWORD"] as const;
+
+describe("the real-remote suite's test-account credentials", () => {
+	const workflows = (): { path: string; content: string }[] =>
+		textFiles().filter(({ path }) => path.startsWith(".github/workflows/"));
+
+	it("actually has something to police — the scans below must not be vacuous", () => {
+		expect(workflows().length).toBeGreaterThan(0);
+		const mentions = textFiles()
+			.filter(({ content }) => content.includes("FILEN_TEST_PASSWORD"))
+			.map(({ path }) => path);
+		expect(mentions).toContain("tests/remote/sandbox.ts");
+		expect(mentions.filter((path) => path.startsWith(".github/workflows/"))).not.toEqual([]);
+	});
+
+	it("reaches CI only as a secret reference, never a literal or a shell argument", () => {
+		const offenders: string[] = [];
+
+		for (const { path, content } of workflows()) {
+			content.split("\n").forEach((line, index) => {
+				for (const name of CREDENTIALS) {
+					if (!line.includes(name)) continue;
+					// The single permitted form: an `env:` entry fed from a repository
+					// secret. Anything else — a default, a `run:` line, an echo — is how a
+					// credential ends up in a public build log.
+					const asSecret = new RegExp(
+						`^\\s*${name}:\\s*\\$\\{\\{\\s*secrets\\.${name}\\s*\\}\\}\\s*$`,
+					);
+					if (!asSecret.test(line)) offenders.push(`${path}:${index + 1} ${line.trim()}`);
+				}
+			});
+		}
+
+		expect(offenders).toEqual([]);
+	});
+
+	it("is read from the environment with no committed fallback", () => {
+		const sandbox = readFileSync(join(repoRoot, "tests", "remote", "sandbox.ts"), "utf8");
+
+		for (const name of CREDENTIALS) expect(sandbox).toContain(`process.env["${name}"]`);
+		// A baked-in default would turn "no credentials configured" from a skip into a
+		// run against whatever account the default names.
+		expect(sandbox).not.toMatch(/FILEN_TEST_\w+"\]\s*(\?\?|\|\|)/);
 	});
 });

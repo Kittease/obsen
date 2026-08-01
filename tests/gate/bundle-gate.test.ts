@@ -157,6 +157,23 @@ describe("the production bundle", () => {
 		expect(await exports.digest).toBe(createHash("sha512").update("obsen").digest("hex"));
 	});
 
+	it("carries the Filen RemotePort adapter, which is where the SDK is actually used", async () => {
+		// Same reason as the engine probe: the adapter is not reachable from `main.ts`
+		// until the settings tab can link a folder (tickets 030–031), and "the file that
+		// touches @filen/sdk is browser-safe" is exactly the claim worth checking early.
+		const probe = await bundleSource(
+			"remote-adapter-probe",
+			[
+				`import { createFilenRemote } from ${JSON.stringify(join(repoRoot, "src/filen/remote.ts"))};`,
+				"export const factory = typeof createFilenRemote;",
+			].join("\n"),
+		);
+		const { exports, requires } = await evaluateBundle(probe);
+
+		expect(requires).toEqual([]);
+		expect(exports.factory).toBe("function");
+	});
+
 	it("has the SDK agree at runtime that it is in a browser", async () => {
 		// The build picks @filen/sdk's browser path; `environment` is computed at
 		// *runtime* from the globals present. Both must say browser, or the SDK will

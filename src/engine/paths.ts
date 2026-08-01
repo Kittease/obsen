@@ -24,6 +24,11 @@ export function parentPath(path: string): string | null {
 	return cut <= 0 ? null : path.slice(0, cut);
 }
 
+/** The last segment: the file or folder's own name, without its folders. */
+export function baseName(path: string): string {
+	return path.slice(path.lastIndexOf("/") + 1);
+}
+
 /** Every folder a path lives under, shallowest first, excluding the vault root. */
 export function ancestorPaths(path: string): string[] {
 	const ancestors: string[] = [];
@@ -42,7 +47,7 @@ export function pathDepth(path: string): number {
 
 /** Lowercased extension including the dot, or `""` for a name without one. */
 export function fileExtension(path: string): string {
-	const name = path.slice(path.lastIndexOf("/") + 1);
+	const name = baseName(path);
 	const dot = name.lastIndexOf(".");
 	return dot <= 0 ? "" : name.slice(dot).toLowerCase();
 }

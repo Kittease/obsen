@@ -14,8 +14,9 @@
     "build": "npm run typecheck && node build/build.ts --production",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "test": "vitest run tests/unit",
-    "gate": "vitest run tests/gate",
+    "test": "vitest run --project unit",
+    "gate": "vitest run --project gate",
+    "test:remote": "node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run --project remote",
     "verify": "npm run lint && npm run typecheck && npm run test && npm run gate"
   },
   "dependencies": {
