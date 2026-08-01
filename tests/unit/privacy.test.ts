@@ -41,6 +41,14 @@ function textFiles(): { path: string; content: string }[] {
 
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 
+/**
+ * Addresses that cannot belong to anyone: the domains RFC 2606 and RFC 6761 reserve
+ * for documentation and testing. A login form needs a placeholder and a fake needs an
+ * account, and neither is a personal detail — but only because the domain is reserved,
+ * which is why the exemption is spelled out rather than left to "it looks fake".
+ */
+const RESERVED_DOMAIN = /@(?:[A-Za-z0-9.-]+\.)?example\.(?:com|net|org)$|@[A-Za-z0-9.-]*\.(?:test|example|invalid|localhost)$/i;
+
 describe("no personal details in the repo", () => {
 	it("actually reads the repo — the scan below must not be vacuous", () => {
 		const scanned = textFiles();
@@ -51,6 +59,26 @@ describe("no personal details in the repo", () => {
 				path.startsWith("docs/tickets/") && /^assignee:.*@/m.test(content),
 		);
 		expect(assignees.length).toBeGreaterThan(0);
+	});
+
+	it("still catches an address the exemptions do not cover", () => {
+		// The reserved-domain exemption is the one hole in the scan below; this is the
+		// proof that it is a hole and not a floor.
+		for (const allowed of ["you@example.com", "a@sub.example.test", "x@thing.invalid"]) {
+			expect(RESERVED_DOMAIN.test(allowed), allowed).toBe(true);
+		}
+		// Assembled rather than written out: an address this scan is *supposed* to catch
+		// has no business being a literal in the file the scan reads.
+		const address = (local: string, domain: string): string => `${local}@${domain}`;
+		for (const caught of [
+			address("someone", "gmail.com"),
+			address("dev", "theodo.com"),
+			// A domain that merely starts with `example.` is not a reserved one.
+			address("a", "example.company"),
+		]) {
+			expect(RESERVED_DOMAIN.test(caught), caught).toBe(false);
+			expect(caught.match(EMAIL)).toHaveLength(1);
+		}
 	});
 
 	it("contains no email addresses outside ticket assignee lines", () => {
@@ -68,6 +96,7 @@ describe("no personal details in the repo", () => {
 				if (isTicket && line.startsWith("assignee:")) return;
 				if (isLockfile && /^\s*"deprecated":/.test(line)) return;
 				for (const match of line.match(EMAIL) ?? []) {
+					if (RESERVED_DOMAIN.test(match)) continue;
 					offenders.push(`${path}:${index + 1} ${match}`);
 				}
 			});

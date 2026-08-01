@@ -34,10 +34,26 @@ function createObsidianStub(): Record<string, unknown> {
 			public app: unknown,
 			public manifest: unknown,
 		) {}
+		addSettingTab(): void {}
+		loadData(): Promise<unknown> {
+			return Promise.resolve(null);
+		}
 	}
+	// Only the base classes the bundle *extends* need to be real: a subclass declaration
+	// is evaluated at load time, which is what this gate runs. Everything the UI merely
+	// calls (`Setting`, `Notice`) is exercised in real Obsidian by ticket 029's harness.
+	class SettingTab {}
+	class Modal {}
 	// `Platform` is read at construction time by the Obsidian adapters (spec §5.8's
 	// Windows name rules); the gate cares that reading it does not crash, not what it says.
-	return { Plugin, Platform: { isWin: false, isMobile: false, isDesktop: true } };
+	return {
+		Plugin,
+		PluginSettingTab: SettingTab,
+		Modal,
+		Setting: class {},
+		Notice: class {},
+		Platform: { isWin: false, isMobile: false, isDesktop: true },
+	};
 }
 
 /**
@@ -49,7 +65,18 @@ export function stubApp(): Record<string, unknown> {
 	return {
 		vault: { configDir: ".obsidian", adapter: {} },
 		fileManager: {},
-		workspace: {},
+		// Called back immediately, the way Obsidian does for a workspace that is already
+		// up — so the gate runs the startup path (the session restore) too.
+		workspace: {
+			onLayoutReady: (callback: () => void): void => {
+				callback();
+			},
+		},
+		secretStorage: {
+			getSecret: (): string | null => null,
+			setSecret: (): void => {},
+			listSecrets: (): string[] => [],
+		},
 	};
 }
 

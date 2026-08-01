@@ -90,6 +90,24 @@ export default defineConfig([
 	},
 
 	{
+		// Obsidian 1.13's declarative settings API (`getSettingDefinitions`) describes a
+		// *list of settings*, and Obsen's tab is not one: it is a state machine (spec
+		// §8.2) whose controls — login form, folder picker, recovery actions — mostly do
+		// not exist in most of its states, so declaring them would advertise controls
+		// that are not there. It is also above the 1.11.4 floor the plugin supports.
+		files: ["src/ui/**/*.ts"],
+		rules: { "obsidianmd/settings-tab/prefer-setting-definitions": "off" },
+	},
+
+	{
+		// Layer 3 renders the settings tab the way Obsidian does: by calling `display()`.
+		// 1.13 deprecates it in favour of the declarative API the tab cannot use (above),
+		// so the deprecation notice is noise on exactly the call the test is about.
+		files: ["tests/wdio/**/*.e2e.ts"],
+		rules: { "@typescript-eslint/no-deprecated": "off" },
+	},
+
+	{
 		// Obsidian's plugin rules describe plugin code. These files are not it: build
 		// scripts and tests are Node programs, and the shims exist precisely to supply
 		// Node-shaped modules and pre-`window` globals to the bundled Filen SDK.
