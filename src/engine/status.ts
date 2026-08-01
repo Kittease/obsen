@@ -15,9 +15,9 @@ import type { RunTrigger } from "./triggers";
 export type EngineStatus = "idle" | "syncing" | "offline" | "quota" | "auth-error" | "frozen";
 
 export type RunOutcome =
-	/** Everything planned was done. */
+	/** Everything planned was done — Conflicts included; a resolved Conflict is work done. */
 	| "ok"
-	/** Some paths were skipped, failed, or await a later slice. */
+	/** Some paths were skipped, failed, or have to be redone by the next Run. */
 	| "partial"
 	/** The remote listing itself failed — nothing was planned. */
 	| "offline"
@@ -42,7 +42,17 @@ export type RunSummary = {
 	moved: number;
 	/** Soft Deletes propagated, files only. */
 	deleted: number;
+	/** Three-Way Merges that came out clean — both edits kept, no copy needed. */
+	merged: number;
+	/** Conflict Copies created, one per row added to `conflicts.md`. */
 	conflicts: number;
+	/**
+	 * Whether this Run's rows actually reached `conflicts.md`. What the shell acts on is
+	 * `conflicts > 0` — spec §6.2 keys the open on a copy having been created, and the
+	 * open *is* the announcement — but a Run that made copies and could not write the
+	 * manifest has something to say in Recent activity rather than a file worth opening.
+	 */
+	manifestWritten: boolean;
 	/** Paths the re-stat guard refused to touch; re-dirtied for the next Run. */
 	requeued: number;
 	skipped: number;

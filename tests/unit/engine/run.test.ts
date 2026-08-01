@@ -8,7 +8,8 @@ import { createWorld, REMOTE_ROOT as ROOT, type SyncWorld } from "../../helpers/
 /**
  * The Run, end to end (spec §5.1–5.2) against in-memory fakes: layer 1 of the
  * testing strategy. Adds, edits and the shape of the Run itself live here; deletions,
- * renames and the phases are in `deletes-renames.test.ts`, conflicts in ticket 033.
+ * renames and the phases are in `deletes-renames.test.ts`, merges and Conflict Copies
+ * in `conflicts.test.ts`.
  */
 
 let world: SyncWorld;
@@ -186,20 +187,21 @@ describe("First Link — a FULL Reconcile with empty state (spec §5.2, ticket 0
 		expect(sync.records.get("Same.md")?.remoteUuid).toBe(remote.uuidAt("Same.md"));
 	});
 
-	it("defers same-path-different-content to the conflict slice, destroying nothing", async () => {
+	it("resolves same-path-different-content as a Conflict, never an overwrite", async () => {
 		await vault.put("Clash.md", "written here");
 		await remote.put("Clash.md", "written there");
 
 		const sync = await world.open();
 		const summary = await sync.syncNow("first-link");
 
-		// Ticket 033 turns this into a Conflict Copy; until then the honest outcome is
-		// "planned, not executed" — never a silent overwrite.
+		// With no record there is no Ancestor, so it is a Conflict Copy by definition;
+		// what the matrix owes here is that neither version was picked over the other.
+		// The copy itself, its name and the manifest are `conflicts.test.ts`.
 		expect(summary.conflicts).toBe(1);
-		expect(summary.outcome).toBe("partial");
 		expect(vault.text("Clash.md")).toBe("written here");
-		expect(remote.text("Clash.md")).toBe("written there");
-		expect(sync.records.has("Clash.md")).toBe(false);
+		expect(remote.text("Clash.md")).toBe("written here");
+		expect(vault.paths()).toHaveLength(3); // the original, the copy, and conflicts.md
+		expect(vault.trashed.size).toBe(0);
 	});
 
 	it("cannot delete anything, because there are no records to delete from", async () => {
@@ -217,10 +219,12 @@ describe("First Link — a FULL Reconcile with empty state (spec §5.2, ticket 0
 		await remote.put("Same.md", "identical bytes");
 		remote.hashless = true; // an older Filen client recorded no plaintext hash
 
-		const summary = await (await world.open()).syncNow("first-link");
+		const plan = await (await world.open()).plan();
 
-		expect(summary.identical).toBe(0);
-		expect(summary.conflicts).toBe(1);
+		// The planner cannot pair them, so it plans a Conflict — which execution then
+		// downgrades to a convergence once it has the bytes (`conflicts.test.ts`).
+		expect(plan.counts.identical).toBe(0);
+		expect(plan.counts.conflict).toBe(1);
 	});
 });
 
@@ -559,26 +563,6 @@ describe("scope, skips and failures", () => {
 		expect(seen).toEqual(["syncing", "idle"]);
 		expect(sync.lastRun?.triggers).toEqual(["startup"]);
 		expect(sync.lastRun?.scope).toBe("full");
-	});
-});
-
-describe("the conflict slice is visible, not silent", () => {
-	it("reports a both-modified path as a conflict instead of picking a winner", async () => {
-		await vault.put("Note.md", "v1");
-		await remote.put("Note.md", "v1");
-		const sync = await world.open();
-		await sync.syncNow("startup");
-
-		await vault.put("Note.md", "v2 — here");
-		await remote.put("Note.md", "v2 — there");
-		const summary = await sync.syncNow("manual");
-
-		// Ticket 033 merges or makes a Conflict Copy; until then the honest outcome is
-		// "planned, not executed" — never last-writer-wins.
-		expect(summary.conflicts).toBe(1);
-		expect(summary.outcome).toBe("partial");
-		expect(vault.text("Note.md")).toBe("v2 — here");
-		expect(remote.text("Note.md")).toBe("v2 — there");
 	});
 });
 

@@ -91,6 +91,8 @@ export default defineConfig([
 			"obsidianmd/no-global-this": "off",
 			"obsidianmd/hardcoded-config-path": "off",
 			"obsidianmd/rule-custom-message": "off",
+			// There is no `window` to prefer a timer from in a headless test run.
+			"obsidianmd/prefer-window-timers": "off",
 			"no-restricted-globals": "off",
 		},
 	},

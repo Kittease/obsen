@@ -26,13 +26,19 @@ export type SyncWorld = {
 	store: FakeStore;
 	clock: FakeClock;
 	/** Opens an engine over this world; `state` seeds the store first. */
-	open(options?: { state?: string; scope?: SyncScope }): Promise<SyncEngine>;
+	open(options?: {
+		state?: string;
+		scope?: SyncScope;
+		deviceName?: string;
+	}): Promise<SyncEngine>;
 	/**
 	 * Marks paths dirty and lets the trailing debounce expire. The request must not be
 	 * awaited before the clock moves — the Run it resolves from is the one the timer
 	 * starts.
 	 */
 	dirtyRun(sync: SyncEngine, paths: string[], hints?: RenameHint[]): Promise<RunSummary>;
+	/** Runs whatever the engine queued for itself — a follow-up Run, and its own. */
+	settle(sync: SyncEngine): Promise<void>;
 	/** Both sides hold exactly these paths, with identical content. */
 	expectConverged(paths: Record<string, string>): void;
 	/** Both sides hold the same paths with the same bytes, whatever those turn out to be. */
@@ -59,12 +65,26 @@ export function createWorld(): SyncWorld {
 				remoteRoot: REMOTE_ROOT,
 				timers: clock,
 				...(options.scope ? { scope: options.scope } : {}),
+				...(options.deviceName ? { deviceName: options.deviceName } : {}),
 			});
 		},
 		async dirtyRun(sync, paths, hints) {
 			const summary = sync.markDirty(paths, "vault-event", hints);
 			await clock.advance(ENGINE_CONSTANTS.eventDebounceMs);
 			return summary;
+		},
+		async settle(sync) {
+			// A Run can queue a Run — resolving a Conflict writes the manifest, which then
+			// has to sync — and each of those waits on a debounce only the clock can expire.
+			// So: keep time moving until the engine stops asking for another turn, rather
+			// than awaiting an `idle()` a frozen clock would never reach. When nothing is
+			// armed, yield to the event loop instead: the Shadow Store's compression is
+			// genuinely asynchronous, and a microtask flush never reaches it.
+			for (let turn = 0; turn < 200 && sync.busy; turn += 1) {
+				if (clock.armed > 0) await clock.advance(ENGINE_CONSTANTS.eventMaxWaitMs);
+				else await new Promise((resolve) => setTimeout(resolve, 0));
+			}
+			await sync.idle();
 		},
 		expectConverged(paths) {
 			expect(vault.paths()).toEqual(Object.keys(paths).sort());

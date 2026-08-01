@@ -1,3 +1,4 @@
+import { DEFAULT_DEVICE_NAME } from "./conflict";
 import { engineConstants, type EngineConstants } from "./constants";
 import { executePlan, type ExecutionReport } from "./execute";
 import { sha512Hex, type Hasher } from "./hash";
@@ -6,6 +7,7 @@ import { computePlan, RemoteUnavailableError, type Plan, type PlanProgress } fro
 import type { RemotePort, StorePort, VaultPort } from "./ports";
 import { RunScheduler, type DirtySet } from "./scheduler";
 import { EVERYTHING, type SyncScope } from "./scope";
+import { referencedHashes, ShadowStore } from "./shadow";
 import {
 	flushState,
 	loadState,
@@ -38,6 +40,8 @@ export type SyncEngineOptions = {
 	scope?: SyncScope;
 	/** The injected clock; production passes `windowTimers` from `src/platform/timers.ts`. */
 	timers: Timers;
+	/** Names this device's Conflict Copies (spec §6.1, §8.7); the shell owns the default. */
+	deviceName?: string;
 	hash?: Hasher;
 	constants?: Partial<EngineConstants>;
 };
@@ -49,6 +53,7 @@ export class SyncEngine {
 	private readonly timers: Timers;
 	private readonly hash: Hasher;
 	private readonly scope: SyncScope;
+	private readonly shadow: ShadowStore;
 	private state: SyncState;
 	/** A plan the user already approved (First Link), used by the next `first-link` Run. */
 	private approved: Plan | null = null;
@@ -69,6 +74,7 @@ export class SyncEngine {
 		this.timers = options.timers;
 		this.hash = options.hash ?? sha512Hex;
 		this.scope = options.scope ?? EVERYTHING;
+		this.shadow = new ShadowStore(options.store, this.hash);
 		this.scheduler = new RunScheduler<RunSummary>({
 			timers: this.timers,
 			constants: this.constants,
@@ -165,6 +171,16 @@ export class SyncEngine {
 		return this.scheduler.request({ trigger: "first-link", scope: plan.scope });
 	}
 
+	/**
+	 * Whether a Run is executing or waiting to — the synchronous counterpart of
+	 * {@link idle}, for callers that have to answer "is there still work?" now rather
+	 * than await it. One Run can queue the next: resolving a Conflict writes the
+	 * manifest, and that write has to sync.
+	 */
+	get busy(): boolean {
+		return this.scheduler.isRunning || this.scheduler.hasPending;
+	}
+
 	/** Resolves when no Run is executing and nothing is pending. */
 	idle(): Promise<void> {
 		return this.scheduler.idle();
@@ -194,7 +210,9 @@ export class SyncEngine {
 			identical: 0,
 			moved: 0,
 			deleted: 0,
+			merged: 0,
 			conflicts: 0,
+			manifestWritten: false,
 			requeued: 0,
 			skipped: 0,
 			failures: [],
@@ -216,16 +234,21 @@ export class SyncEngine {
 			);
 		}
 
+		// Everything the Shadow Store held for this state before the Run; whatever no
+		// record names by the end of it is garbage (spec §3.4).
+		const ancestorsBefore = referencedHashes(this.state);
 		let report: ExecutionReport;
 		try {
 			report = await executePlan({
 				vault: this.options.vault,
 				remote: this.options.remote,
 				store: this.options.store,
+				shadow: this.shadow,
 				state: this.state,
 				hash: this.hash,
 				constants: this.constants,
 				timers: this.timers,
+				deviceName: this.options.deviceName ?? DEFAULT_DEVICE_NAME,
 				plan,
 			});
 		} catch (error) {
@@ -242,19 +265,22 @@ export class SyncEngine {
 			await flushState(this.options.store, this.state);
 		}
 		this.unpersisted = false;
+		// Mark and sweep, after the records that keep an Ancestor alive are final.
+		await this.shadow.sweep(referencedHashes(this.state), ancestorsBefore);
 		this.status.set("idle");
 
 		// A path the re-stat guard skipped is not a failure — it is work the next Run has
-		// to do, so it goes straight back into the Dirty Set (spec §5.5).
-		if (report.requeue.length > 0) {
-			void this.scheduler.request({ trigger: "vault-event", scope: pathScope(report.requeue) });
+		// to do, so it goes straight back into the Dirty Set (spec §5.5). The manifest a
+		// conflict just wrote rides along: it is an ordinary local write that has to sync.
+		const next = [...report.requeue, ...report.followUp];
+		if (next.length > 0) {
+			void this.scheduler.request({ trigger: "vault-event", scope: pathScope(next) });
 		}
 
+		// A resolved Conflict is work completed, not work outstanding: `partial` is for
+		// paths this Run could not finish.
 		const clean =
-			report.failures.length === 0 &&
-			report.skipped === 0 &&
-			report.requeue.length === 0 &&
-			report.conflicts === 0;
+			report.failures.length === 0 && report.skipped === 0 && report.requeue.length === 0;
 		return this.finish(
 			summarize(clean ? "ok" : "partial", {
 				uploaded: report.uploaded,
@@ -262,7 +288,9 @@ export class SyncEngine {
 				identical: report.identical,
 				moved: report.moved,
 				deleted: report.deleted,
+				merged: report.merged,
 				conflicts: report.conflicts,
+				manifestWritten: report.manifestWritten,
 				requeued: report.requeue.length,
 				skipped: report.skipped,
 				failures: report.failures,

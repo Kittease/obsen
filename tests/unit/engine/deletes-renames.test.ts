@@ -397,10 +397,9 @@ describe("five execution phases (spec §5.4–5.5)", () => {
 
 		// …and the path went back into the Dirty Set, so the follow-up Run judges it for
 		// real — as the conflict it now genuinely is, rather than as an overwrite.
-		await world.clock.advance(ENGINE_CONSTANTS.eventDebounceMs);
-		await sync.idle();
-		expect(sync.lastRun?.conflicts).toBe(1);
+		await world.settle(sync);
 		expect(world.vault.text("Note.md")).toBe("v2 — typed here, mid-download");
+		expect(world.vault.paths().filter((path) => path.includes("(conflict "))).toHaveLength(1);
 	});
 
 	it("refuses to trash a local file that was edited since classification", async () => {

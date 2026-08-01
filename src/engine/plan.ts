@@ -23,9 +23,10 @@ import type { RenameHint, RunScope } from "./triggers";
  * executed here** — that separation is what makes the First Link dry-run preview a
  * real preview rather than a second code path (spec §8.4).
  *
- * The decision matrix is complete apart from its conflict cells: three-way merge and
- * Conflict Copies are ticket 033, so those cells plan a `pending` operation and the
- * executor reports what it could not do yet instead of pretending the path converged.
+ * The conflict cells plan a `conflict` operation rather than deciding between a merge
+ * and a Conflict Copy: that choice needs the Ancestor and both sides' bytes, which is
+ * the executor's business (spec §6). The planner's job is to say *which* paths cannot
+ * converge on their own — which is exactly what the First-Link preview lists.
  */
 
 /** How one side compares to the record. `added` only occurs where no record exists. */
@@ -63,8 +64,21 @@ export type Operation =
 	| { kind: "trash-local"; path: string; stat: Stat }
 	| { kind: "trash-folder-remote"; path: string }
 	| { kind: "trash-folder-local"; path: string }
-	/** A Conflict the merge slice (ticket 033) owns: found and reported, never resolved here. */
-	| { kind: "pending"; path: string; detail: string }
+	/**
+	 * Both sides hold content the other has not seen (spec §6). Whether that ends as a
+	 * Three-Way Merge or a Conflict Copy is decided during execution, with the Ancestor
+	 * and both versions in hand.
+	 */
+	| {
+			kind: "conflict";
+			path: string;
+			/** `null` at First Link — no record means no Ancestor, so no merge is possible. */
+			record: FileRecord | null;
+			stat: Stat;
+			/** The local content hash classification computed, when it needed one. */
+			hash: string | null;
+			entry: RemoteEntry;
+	  }
 	| { kind: "skip"; path: string; reason: SkipReason; detail: string };
 
 export type PlanCounts = {
@@ -76,6 +90,11 @@ export type PlanCounts = {
 	moved: number;
 	/** Soft Deletes, files only; the folders that follow are bookkeeping. */
 	deleted: number;
+	/**
+	 * Paths neither side can converge alone. Each becomes a Three-Way Merge or a
+	 * Conflict Copy at execution — the planner deliberately does not guess which, so
+	 * this is the *upper bound* on copies, and at First Link (no Ancestors) it is exact.
+	 */
 	conflict: number;
 	skipped: number;
 };
@@ -86,6 +105,12 @@ export type Plan = {
 	counts: PlanCounts;
 	/** Capped at `conflictPreviewLimit` — what the First-Link preview lists (spec §5.9). */
 	conflictPaths: string[];
+	/**
+	 * Every path the remote listing held, scope or no scope. Conflict Copy naming needs
+	 * it: a name free in the vault but taken on Filen would upload straight over a file
+	 * this device has never seen.
+	 */
+	remotePaths: ReadonlySet<string>;
 };
 
 export type PlanProgress =
@@ -162,7 +187,13 @@ export async function computePlan(input: PlanInput): Promise<Plan> {
 	operations.push(...folderOperations(operations, entries));
 	operations.push(...folderTrashes(operations, remotePaths, scan));
 
-	return { scope: run, operations, counts: count(operations), conflictPaths: conflicts(operations, constants) };
+	return {
+		scope: run,
+		operations,
+		counts: count(operations),
+		conflictPaths: conflicts(operations, constants),
+		remotePaths: new Set(remotePaths),
+	};
 }
 
 /** The remote side of the diff, keyed by path, with duplicate paths surfaced. */
@@ -439,13 +470,10 @@ function decide(
 		if (stat && entry) {
 			// Identical content on both sides pairs silently (ticket 011).
 			if (sameContent) return converge(path, stat, hash, entry, constants);
-			// An unknown remote hash cannot prove identity, and at First Link there is
-			// no Ancestor to merge against either way: the conflict slice decides.
-			return {
-				kind: "pending",
-				path,
-				detail: "both sides hold this path at First Link",
-			};
+			// An unknown remote hash cannot prove identity, and with no record there is
+			// no Ancestor to merge against: the copy is planned, and execution — which
+			// fetches the bytes anyway — still converges the pair if they match after all.
+			return { kind: "conflict", path, record: null, stat, hash, entry };
 		}
 		if (stat) return { kind: "upload", path, stat };
 		if (entry) return download(path, entry, stat, vault);
@@ -462,10 +490,13 @@ function decide(
 	if (local === "unchanged" && remote === "modified" && entry) return download(path, entry, stat, vault);
 	if (local === "modified" && remote === "unchanged" && stat) return { kind: "upload", path, stat };
 	if (local === "modified" && remote === "modified") {
+		// Both sides being modified means both sides have content, but the matrix must
+		// never fall through to a delete on a classification it does not recognize.
+		if (!stat || !entry) return null;
 		// Compare hashes before anything else: equal means both sides landed on the
 		// same content, so there is nothing to merge and nothing to transfer.
-		if (sameContent && stat && entry) return converge(path, stat, hash, entry, constants);
-		return { kind: "pending", path, detail: "changed on both sides since the last sync" };
+		if (sameContent) return converge(path, stat, hash, entry, constants);
+		return { kind: "conflict", path, record, stat, hash, entry };
 	}
 
 	// Edit beats delete (spec §5.2, ticket 007): the surviving edit is restored to the
@@ -674,7 +705,7 @@ function count(operations: readonly Operation[]): PlanCounts {
 			case "skip":
 				counts.skipped += 1;
 				break;
-			case "pending":
+			case "conflict":
 				counts.conflict += 1;
 				break;
 			default:
@@ -686,7 +717,7 @@ function count(operations: readonly Operation[]): PlanCounts {
 
 function conflicts(operations: readonly Operation[], constants: EngineConstants): string[] {
 	return operations
-		.filter((operation) => operation.kind === "pending")
+		.filter((operation) => operation.kind === "conflict")
 		.map((operation) => operation.path)
 		.slice(0, constants.conflictPreviewLimit);
 }

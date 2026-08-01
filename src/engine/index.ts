@@ -7,6 +7,9 @@
  * Tests import the individual modules instead, so a test names the unit it exercises.
  */
 
+// The three the shell needs: the note it opens after a Conflict (spec §6.2), and the
+// Device Name rules the settings field has to apply before storing one (spec §8.7).
+export { CONFLICT_MANIFEST_PATH, DEFAULT_DEVICE_NAME, sanitizeDeviceName } from "./conflict";
 export { ENGINE_CONSTANTS, engineConstants, type EngineConstants } from "./constants";
 export { SyncEngine, type SyncEngineOptions } from "./engine";
 export { type ExecutionReport, type TransferProgress } from "./execute";

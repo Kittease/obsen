@@ -1,10 +1,14 @@
 /**
  * Spec §5.9 — "one table, all normative" — as one object.
  *
- * Every knob the engine has lives here so the spec table and the code can be read
- * against each other. Values are engine constants, not settings: nothing in the UI
- * changes them. Tests override them by passing a partial (injected timers make the
- * time-based ones instant).
+ * Every knob the spec's table names lives here, so the two can be read against each
+ * other. Values are engine constants, not settings: nothing in the UI changes them.
+ * Tests override them by passing a partial (injected timers make the time-based ones
+ * instant).
+ *
+ * Implementation limits no spec line names — the merge's work budget, the Conflict
+ * Copy collision cap — deliberately stay next to the code that enforces them: putting
+ * them here would blur which of these values the spec actually fixes.
  */
 export type EngineConstants = {
 	/** Trailing debounce for vault/socket events. */
